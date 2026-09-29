@@ -1,0 +1,18 @@
+# Build artifacts
+/target
+build.log
+build.err
+build.pid
+
+# Compiled binary (build from source instead)
+/pdf-cli.exe
+
+# Test scratch space (generated PDFs, downloaded pdfium, etc.)
+/testdata/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
