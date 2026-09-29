@@ -1,6 +1,6 @@
 [package]
 name = "pdf-cli"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "AI-native PDF toolkit CLI — designed for agent interaction"
 license = "MIT"
@@ -16,6 +16,7 @@ image = "0.25"
 pdf-extract = "0.10"
 tempfile = "3"
 pdfium-render = { version = "0.8", features = ["image"] }
+ureq = { version = "2", features = ["json"] }
 
 [profile.release]
 opt-level = 3

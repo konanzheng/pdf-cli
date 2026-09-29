@@ -1,9 +1,13 @@
 pub mod convert;
 pub mod doctor;
 pub mod extract;
+pub mod extract_images;
 pub mod info;
 pub mod invoice;
+pub mod meta;
+pub mod ocr;
 pub mod optimize;
+pub mod pagenum;
 pub mod pages;
 pub mod pdf2img;
 pub mod security;
