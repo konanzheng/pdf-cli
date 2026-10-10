@@ -45,6 +45,20 @@ cd pdf-cli
 cargo build --release
 ```
 
+## Testing
+
+A self-contained smoke test exercises every command. It generates its own fixtures (via .NET
+`System.Drawing`), so no external files are needed:
+
+```powershell
+cargo build
+powershell -ExecutionPolicy Bypass -File tests\smoke_test.ps1 -Exe target\debug\pdf-cli.exe
+```
+
+Options: `-Exe <path>` (binary to test; auto-detected if omitted),
+`-PdfiumPath <pdfium.dll>` (auto-detected; `pdf-to-image` is skipped if missing).
+The script exits non-zero on any failure.
+
 ## Usage
 
 ### JSON contract
@@ -117,7 +131,8 @@ Page-range grammar: `1-3,5,7-9`.
 rendered *into the pixels* of a scanned/raster page (the common case for "仅限…项目用" tiling
 watermarks on scanned reports). It walks each page's Image XObjects and whites out pixels whose
 luminance is at/above `--threshold` **and** whose color saturation is at/below `--max-sat`,
-protecting dark text and colored seals.
+protecting dark text and colored seals. Supported image encodings: `DCTDecode` (JPEG) and
+`FlateDecode` / raw 8-bit RGB or Gray.
 
 ```powershell
 # Default: threshold 212, max-sat 12, re-encode quality 82
@@ -191,6 +206,8 @@ src/
     ├── optimize.rs       # compress
     ├── info.rs           # metadata
     └── doctor.rs         # structural analysis
+tests/
+    └── smoke_test.ps1    # self-contained end-to-end smoke test
 ```
 
 ## Limitations

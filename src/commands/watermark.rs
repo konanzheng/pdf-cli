@@ -1,9 +1,17 @@
 use crate::error::PdfError;
 use crate::output::CommandResult;
+use image::codecs::jpeg::JpegEncoder;
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
+use std::collections::HashSet;
 use std::path::Path;
 
+// =====================================================================
+// watermark-add — 添加文本水印
+// =====================================================================
+
 /// 把 /F1 字体引用合并进页面的 Resources，**保留**已有的 XObject / 其他字体 / 属性。
+///
+/// 之前的实现直接覆盖整个 Resources，导致页面上原有的图像（XObject）被丢弃。
 fn merge_font_resource(doc: &mut Document, page_id: ObjectId, font_id: ObjectId) {
     let existing = doc
         .get_object(page_id)
@@ -80,13 +88,16 @@ pub fn add(
     });
 
     for (_, page_id) in pages {
+        let cos_r = format!("{:.4}", rotation.to_radians().cos());
+        let sin_r = format!("{:.4}", rotation.to_radians().sin());
+        let neg_sin_r = format!("{:.4}", -rotation.to_radians().sin());
         let content = format!(
-            "q\n{opacity} g\nBT\n/F1 {fs} Tf\n{rot} {rot2} {neg_rot} {rot} 0 0 Tm\n({txt}) Tj\nET\nQ\n",
+            "q\n{opacity} g\nBT\n/F1 {fs} Tf\n{cos_r} {sin_r} {neg_sin_r} {cos_r} 0 0 Tm\n({txt}) Tj\nET\nQ\n",
             opacity = opacity,
             fs = font_size,
-            rot = format!("{:.4}", rotation.to_radians().cos()),
-            rot2 = format!("{:.4}", rotation.to_radians().sin()),
-            neg_rot = format!("{:.4}", -rotation.to_radians().sin()),
+            cos_r = cos_r,
+            sin_r = sin_r,
+            neg_sin_r = neg_sin_r,
             txt = text.replace('(', "\\(").replace(')', "\\)"),
         );
 
@@ -137,17 +148,13 @@ pub fn add(
 // watermark-remove — 去除「烧录进图像」的水印（尽力版）
 //
 // 适用范围：页面为整页扫描图/栅格图（Image XObject），水印是渲染进像素的
-// 浅色（低饱和、高亮度）内容。
-// 支持两种图像编码：
+// 浅色（低饱和、高亮度）内容。支持两种图像编码：
 //   - DCTDecode (JPEG)：直接解码
 //   - FlateDecode / 无 Filter (raw 8-bit RGB/Gray)：先解压再解析
 // 统一解码为 RGB8，按亮度阈值 + 饱和度上限把「浅灰」像素涂白，再编码回 JPEG。
 //
 // 不适用：矢量 / 文本层水印（无独立对象可剥离）。
 // =====================================================================
-
-use image::codecs::jpeg::JpegEncoder;
-use std::collections::HashSet;
 
 /// 解析页码范围，如 "1-3,5,7-9"。
 fn parse_pages(spec: &str, total: u32) -> Result<Vec<u32>, PdfError> {
@@ -316,13 +323,21 @@ fn page_image_xobjects(doc: &Document, page_id: ObjectId) -> Vec<ObjectId> {
         .ok()
         .and_then(|o| match o {
             Object::Dictionary(d) => Some(d.clone()),
-            Object::Reference(id) => doc.get_object(*id).ok().and_then(|x| x.as_dict().ok()).cloned(),
+            Object::Reference(id) => doc
+                .get_object(*id)
+                .ok()
+                .and_then(|x| x.as_dict().ok())
+                .cloned(),
             _ => None,
         })
         .and_then(|res| res.get(b"XObject").ok().cloned())
         .and_then(|o| match o {
             Object::Dictionary(d) => Some(d.clone()),
-            Object::Reference(id) => doc.get_object(id).ok().and_then(|x| x.as_dict().ok()).cloned(),
+            Object::Reference(id) => doc
+                .get_object(id)
+                .ok()
+                .and_then(|x| x.as_dict().ok())
+                .cloned(),
             _ => None,
         });
     if let Some(d) = xobj_dict {
