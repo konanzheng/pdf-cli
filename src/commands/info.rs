@@ -3,6 +3,12 @@ use crate::output::CommandResult;
 use lopdf::Document;
 
 pub fn run(input: &str) -> Result<CommandResult, PdfError> {
+    if !std::path::Path::new(input).exists() {
+        return Err(PdfError::FileNotFound {
+            path: input.to_string(),
+        });
+    }
+
     let doc = Document::load(input).map_err(|e| PdfError::ParseFailed {
         reason: e.to_string(),
     })?;

@@ -111,6 +111,27 @@ enum Commands {
         font_size: f32,
     },
 
+    /// Remove burned-in image watermarks from scanned/raster pages (best-effort)
+    #[command(name = "watermark-remove")]
+    WatermarkRemove {
+        #[arg(long)]
+        input: String,
+        #[arg(long)]
+        output: String,
+        /// Luminance threshold (0-255): pixels at/above this are treated as watermark/background
+        #[arg(long, default_value_t = 212)]
+        threshold: u8,
+        /// Max color saturation (0-255): only low-saturation pixels are whited out (protects colored seals)
+        #[arg(long, default_value_t = 12)]
+        max_sat: u8,
+        /// Page range, e.g. 1-3,5 (default: all)
+        #[arg(long)]
+        pages: Option<String>,
+        /// JPEG re-encode quality (1-100)
+        #[arg(long, default_value_t = 82)]
+        quality: u8,
+    },
+
     /// Encrypt PDF with password
     Encrypt {
         #[arg(long)]
@@ -319,6 +340,22 @@ fn main() {
             font_size,
         } => commands::watermark::add(
             &input, &text, &output, opacity, rotation, font_size, dry_run,
+        ),
+        Commands::WatermarkRemove {
+            input,
+            output,
+            threshold,
+            max_sat,
+            pages,
+            quality,
+        } => commands::watermark::remove(
+            &input,
+            &output,
+            threshold,
+            max_sat,
+            pages.as_deref(),
+            quality,
+            dry_run,
         ),
         Commands::Encrypt {
             input,

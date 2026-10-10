@@ -21,7 +21,7 @@ Error codes: `FILE_NOT_FOUND`, `UNSUPPORTED_FORMAT`, `PARSE_FAILED`,
 `PASSWORD_REQUIRED`, `OPERATION_FAILED`, `INVALID_PAGE_RANGE`, `MISSING_ARG`,
 `BROWSER_NOT_FOUND`.
 
-Page-range grammar (used by `extract`, `delete-pages`, `rotate`, `split`, `pdf-to-image`, `ocr`): `1-3,5,7-9`.
+Page-range grammar (used by `extract`, `delete-pages`, `rotate`, `split`, `pdf-to-image`, `ocr`, `watermark-remove`): `1-3,5,7-9`.
 
 ## Commands
 
@@ -138,6 +138,26 @@ pdf-cli watermark-add --input doc.pdf --text "DRAFT" --opacity 0.3 --rotation 45
 ```
 `--opacity` 0.0–1.0 (default 0.2), `--rotation` degrees (default 45), `--font-size` (default 60).
 
+### watermark-remove — remove burned-in image watermarks (best-effort)
+```
+pdf-cli watermark-remove --input scan.pdf --output clean.pdf
+pdf-cli watermark-remove --input scan.pdf --output clean.pdf --threshold 212 --max-sat 12
+pdf-cli watermark-remove --input scan.pdf --output clean.pdf --threshold 205 --pages 1-10
+pdf-cli watermark-remove --input scan.pdf --output clean.pdf --quality 82 --json
+```
+Removes watermarks that are **burned into the pixels** of a scanned/raster page (each page is
+one big image XObject, e.g. a tiled "仅限XX项目用" watermark). It walks each page's Image
+XObjects and whites out pixels whose luminance is at/above `--threshold` **and** whose color
+saturation is at/below `--max-sat`, keeping dark text and colored seals.
+
+Options: `--threshold` (0–255, default 212), `--max-sat` (0–255, default 12),
+`--pages` (page range), `--quality` (JPEG re-encode quality 1–100, default 82).
+
+**Scope / limits**: only handles **raster/burned-in** watermarks on `DCTDecode` RGB/Gray
+page images. It does **NOT** remove vector or text-layer watermarks (independent PDF objects) —
+those have no reliable general solution. If no removable image watermark is found, the command
+returns `OPERATION_FAILED` with an explanation instead of writing an unchanged file.
+
 ### encrypt / decrypt
 ```
 pdf-cli encrypt --input doc.pdf --user-password secret --output locked.pdf
@@ -184,6 +204,11 @@ User: "把这些发票图片按A4上下拼起来"
 pdf-cli invoice --input "inv1.jpg,inv2.jpg,inv3.jpg" --output invoices.pdf --json
 ```
 
+User: "这个扫描件上有水印，帮我去掉"
+```powershell
+pdf-cli watermark-remove --input scan.pdf --output clean.pdf --threshold 212 --json
+```
+
 User: "这个PDF前3页提取成文本"
 ```powershell
 pdf-cli extract --input doc.pdf --pages 1-3 --json
@@ -204,7 +229,9 @@ pdf-cli doctor --input doc.pdf --json
 - `pdf-to-image` and `ocr` require `pdfium.dll` (not bundled).
 - `web-to-pdf` requires Microsoft Edge.
 - `ocr` additionally requires a running ocr-rust service (separate project).
-- **Watermark removal / font repair / digital signature / form fill / PDF→Word**: not supported (see ROADMAP.md).
+- **`watermark-remove`** only removes **burned-in image** watermarks on raster/scanned pages;
+  it does **not** remove vector or text-layer watermarks.
+- **Font repair / digital signature / form fill / PDF→Word**: not supported (see ROADMAP.md).
 - **SVG → PDF** goes through headless Edge.
 
 ## Token-Efficient Patterns

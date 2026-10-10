@@ -26,6 +26,7 @@ flag-driven command with machine-readable JSON output, so an AI agent can drive 
 | `delete-pages` | Remove specific pages |
 | `rotate` | Rotate pages by 90/180/270 |
 | `watermark-add` | Add a text watermark (opacity / rotation / size) |
+| `watermark-remove` | Remove **burned-in** image watermarks from scanned/raster pages (best-effort) |
 | `compress` | Reduce file size (prune objects + recompress streams) |
 | `encrypt` | Password-protect a PDF (128-bit) |
 | `decrypt` | Remove password protection |
@@ -99,6 +100,7 @@ pdf-cli rotate --input clean.pdf --angle 90 --output rotated.pdf
 
 # Watermark / compress / encrypt
 pdf-cli watermark-add --input doc.pdf --text "CONFIDENTIAL" --opacity 0.2 --output marked.pdf
+pdf-cli watermark-remove --input scan.pdf --output clean.pdf --threshold 212 --max-sat 12
 pdf-cli compress --input large.pdf --output small.pdf --level maximum
 pdf-cli encrypt --input doc.pdf --user-password secret --output locked.pdf
 pdf-cli decrypt --input locked.pdf --password secret --output unlocked.pdf
@@ -108,6 +110,30 @@ pdf-cli extract --input doc.pdf --pages 1-3 --json
 ```
 
 Page-range grammar: `1-3,5,7-9`.
+
+### Watermark removal (best-effort)
+
+`watermark-remove` targets **burned-in** watermarks — light, low-saturation content that was
+rendered *into the pixels* of a scanned/raster page (the common case for "仅限…项目用" tiling
+watermarks on scanned reports). It walks each page's Image XObjects and whites out pixels whose
+luminance is at/above `--threshold` **and** whose color saturation is at/below `--max-sat`,
+protecting dark text and colored seals.
+
+```powershell
+# Default: threshold 212, max-sat 12, re-encode quality 82
+pdf-cli watermark-remove --input scan.pdf --output clean.pdf
+
+# Tighten/loosen the threshold; process only some pages
+pdf-cli watermark-remove --input scan.pdf --output clean.pdf --threshold 205 --pages 1-10
+```
+
+Options: `--threshold` (0–255, default 212), `--max-sat` (0–255, default 12),
+`--pages` (page range), `--quality` (JPEG re-encode quality, 1–100, default 82).
+
+**Scope / limits:** it does **not** remove *vector* or *text-layer* watermarks (independent
+PDF objects) — those have no reliable general solution and remain unsupported. If no
+removable image watermark is found, the command fails with an explanatory message rather than
+writing an unchanged file.
 
 ## Runtime dependencies
 
@@ -160,7 +186,7 @@ src/
     ├── ocr.rs            # OCR via external ocr-rust service
     ├── extract.rs        # text extraction
     ├── pages.rs          # merge / split / delete-pages / rotate
-    ├── watermark.rs      # text watermark
+    ├── watermark.rs      # text watermark add + burned-in watermark remove
     ├── security.rs       # encrypt / decrypt
     ├── optimize.rs       # compress
     ├── info.rs           # metadata
@@ -170,7 +196,9 @@ src/
 ## Limitations
 
 - **OCR** requires an external ocr-rust service.
-- **Watermark removal / font repair / digital signature / form fill / PDF→Word**: not supported (see ROADMAP.md).
+- **Vector/text-layer watermark removal, font repair, digital signature, form fill,
+  PDF→Word**: not supported (see ROADMAP.md). `watermark-remove` handles only burned-in
+  watermarks on raster/scanned pages, best-effort and threshold-based.
 - **SVG → PDF** goes through headless Edge.
 
 ## License
