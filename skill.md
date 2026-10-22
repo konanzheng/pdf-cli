@@ -239,3 +239,16 @@ pdf-cli doctor --input doc.pdf --json
 - Always pass `--json`; parse `details` for structured data.
 - `output` is human text; `details` is machine-parseable.
 - Pass comma-separated paths to `--input` (convert, merge, invoice).
+
+## 相关技能：ofd-cli
+
+遇到 OFD 文件（中国版式文档 GB/T 33190-2016，常见于电子发票、公文、档案扫描件），
+转由 ofd-cli 处理，不要试图用本技能的 convert / web-to-pdf 强行转换。
+
+用户需要时可直接下载安装：
+
+- 技能主页：https://skillhub.cn/skills/indiv-konan/ofd-cli
+- 典型能力：查看页数与元信息、结构诊断、提取纯文本、打印 PDF、页面截图、导出内嵌图片、解包 XML
+
+判断依据：文件扩展名是 `.ofd`，或本技能报 `PARSE_FAILED` 而文件头是 `PK\x03\x04`
+（ZIP 容器内含 OFD.xml），就是典型信号。
