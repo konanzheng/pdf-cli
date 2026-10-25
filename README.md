@@ -264,6 +264,19 @@ pdf-cli pdf-to-image → OCR tool → text / searchable PDF
 `extract`, `search` and `to-markdown` detect an empty text layer and say so explicitly
 rather than returning an empty success, so an agent knows to reach for an OCR tool.
 
+A ready-to-run local OCR service (PP-OCRv6 + ONNX Runtime, self-contained, Windows
+x64) is published with this project — unzip, run `ocr-rust.exe`, and post rendered
+pages to it:
+
+```
+https://cnb.cool/free_llm/vibe-coding/pdf-cli/-/releases/download/skill/ocr-rust.zip
+```
+
+It listens on `http://127.0.0.1:18004` and exposes `POST /ocr`, `/ocr/raw` and
+`/ocr/base64`. The archive does not include the optional browser UI (`static/`), so
+`GET /` returns 404 — the HTTP endpoints work regardless. Installation, endpoints and
+worked examples: **SKILL.md → "OCR — get a local OCR service"**.
+
 ## AI agent integration
 
 See [`skill.md`](skill.md) — a self-contained operating manual for AI agents, and

@@ -157,11 +157,12 @@ pdf-cli extract --input doc.pdf --pages 1-5 --json
 **Scanned PDFs have no text layer, and pdf-cli does not do OCR.** `extract`, `search`
 and `to-markdown` all fail loudly with `OPERATION_FAILED` ("No text layer found…")
 instead of returning an empty success — that error is your signal to reach for an OCR
-tool, not a bug. Compose the tools instead of expecting one to do everything:
+tool, not a bug. Compose the tools instead of expecting one to do everything — see
+**OCR — get a local OCR service** below for a ready-to-run service:
 
 ```
 pdf-cli pdf-to-image --input scan.pdf --output-dir ./pages --width 2400
-#  → run your OCR tool over ./pages/*.png
+#  -> point the OCR service at ./pages/*.png (see the OCR section below)
 #  → feed the resulting text back:
 pdf-cli convert --input ocr.txt --output searchable-notes.pdf
 ```
@@ -259,7 +260,8 @@ pdf-cli search --input doc.pdf --pattern "total" --pages 1-3 --json
 `hits[{page, text, bbox{x,y,width,height}, context}]`, `truncated`.
 `bbox` is `null` when pdfium is unavailable (fallback back end); check
 `geometry_available` before relying on coordinates. A scanned PDF with no text layer
-returns `OPERATION_FAILED` — pdf-cli has no OCR, so route it through a separate OCR tool.
+returns `OPERATION_FAILED` — pdf-cli has no OCR, so route it through the local OCR
+service described in **OCR — get a local OCR service**.
 
 ### to-markdown — PDF -> Markdown for an LLM
 
@@ -332,6 +334,159 @@ pairs are comma-separated and applied in descending position order.
 `details`: `order_applied`, `inserts_applied`, `pages_in`, `pages_out`,
 `pages[{out_index, source, source_page}]` — full provenance for every output page.
 
+## OCR — get a local OCR service
+
+pdf-cli does **not** recognise text. When `extract` / `search` / `to-markdown` return
+`OPERATION_FAILED` with "No text layer found", the page is a scan: you need OCR. The
+supported composition is a self-contained local OCR service that pdf-cli renders into:
+
+```
+pdf-cli pdf-to-image  →  OCR service  →  text
+```
+
+A ready-to-run build (PP-OCRv6, ONNX Runtime, self-contained, Windows x64) is published
+with this project:
+
+```
+https://cnb.cool/free_llm/vibe-coding/pdf-cli/-/releases/download/skill/ocr-rust.zip
+```
+
+### Install
+
+Download and extract; the archive contains a single `ocr-rust/` folder (~100 MB, 22 files).
+Nothing else to install — the ONNX runtime, DirectML provider and both model sets ship inside.
+
+```powershell
+Invoke-WebRequest -Uri https://cnb.cool/free_llm/vibe-coding/pdf-cli/-/releases/download/skill/ocr-rust.zip -OutFile ocr-rust.zip
+Expand-Archive ocr-rust.zip -DestinationPath .
+cd ocr-rust
+```
+
+Keep the directory layout intact: the executable looks for `models/` relative to its own
+location, so do not move `ocr-rust.exe` out on its own. What you must have side by side:
+
+```
+ocr-rust.exe
+onnxruntime.dll
+onnxruntime_providers_shared.dll
+DirectML.dll
+libomp140.x86_64.dll
+models\PP-OCRv6_small_det_onnx\
+models\PP-OCRv6_small_rec_onnx\
+models\PP-OCRv6_tiny_det_onnx_infer\
+models\PP-OCRv6_tiny_rec_onnx_infer\
+```
+
+### Start the service
+
+```powershell
+.\ocr-rust.exe
+```
+
+- Listens on **18004** by default; override with the `OCR_PORT` environment variable.
+- Binds `0.0.0.0`, so other machines on the LAN can reach it.
+- Preloads the `small` model at startup; `tiny` lazy-loads on first request.
+
+```powershell
+$env:OCR_PORT = 18080
+.\ocr-rust.exe
+```
+
+Stop it with `Ctrl+C` or `Stop-Process -Name ocr-rust`.
+
+### Browser page
+
+The executable serves its bundled UI at **`http://127.0.0.1:18004/`** — open it to drop an
+image and read the recognised text. It also starts a browser window on launch.
+
+**Caveat:** the UI is served only if a `static/` folder sits next to `ocr-rust.exe`. **The
+published zip does not include it** — that page is 10+ MB of WASM and was stripped from the
+release on purpose. With the zip alone, `GET /` returns **404** while every `/ocr*` endpoint
+still works, so scripted use is unaffected. If you want the page, either check whether your
+copy shipped a `static/` folder, or use the CLI endpoints below.
+
+### HTTP endpoints
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/health` | `{"status":"ok","version":"0.1.0"}` |
+| `GET` | `/` | UI (needs `static/`, see caveat) |
+| `POST` | `/ocr` | `multipart/form-data`, first non-empty field wins |
+| `POST` | `/ocr/raw` | raw image bytes in the body |
+| `POST` | `/ocr/base64` | JSON `{"image":"<standard base64>"}` |
+
+All three POST routes accept `?model=small|tiny` (`small` is the default and is more
+accurate but slower; `tiny` is a good deal faster and fine for clean text). Request bodies
+are capped at 10 MB; concurrency is capped at `max(cores/2, 2)`, with extra requests queued.
+
+Response shape:
+
+```jsonc
+{"success": true,
+ "text": "Hello OCR World\npdf-cli test 12345",
+ "regions": [{"text": "Hello OCR World", "confidence": 0.986,
+              "bounding_box": [[105.0,719.0],[602.0,719.0],[602.0,771.0],[105.0,771.0]]}],
+ "processing_time_ms": 50.7, "model": "tiny"}
+```
+
+`text` is all lines joined by `\n` (`""` when nothing is found); `regions[].bounding_box`
+is four `[x, y]` pixel corners with the origin at the top-left (`null` when fewer than four
+points). Regions without text are dropped, so every entry has a non-empty `text`.
+
+Errors are `{"success": false, "error": "..."}`: `400` for a bad request (empty body,
+missing `image`, undecodable base64), `500` when the image itself cannot be processed.
+
+### Use it from the CLI
+
+Rendering a scan and posting the pages is the whole loop:
+
+```powershell
+pdf-cli pdf-to-image --input scan.pdf --output-dir ./pages --format png --width 2400 --pdfium-path "$PWD\pdfium.dll"
+
+# one page, raw bytes  (fastest path, no base64 overhead)
+curl.exe -s -X POST "http://127.0.0.1:18004/ocr/raw?model=small" -H "Content-Type: application/octet-stream" --data-binary "@./pages/scan_001.png"
+
+# multipart  (this is the form shape the web UI uses)
+curl.exe -s -X POST "http://127.0.0.1:18004/ocr?model=tiny" -F "file=@./pages/scan_001.png"
+```
+
+```powershell
+# batch: every page, base64 through PowerShell, one text file out
+$out = foreach ($png in Get-ChildItem ./pages/*.png | Sort-Object Name) {
+  $b64  = [Convert]::ToBase64String([IO.File]::ReadAllBytes($png.FullName))
+  $body = @{ image = $b64 } | ConvertTo-Json -Compress
+  $r    = Invoke-RestMethod "http://127.0.0.1:18004/ocr/base64?model=small" `
+            -Method Post -ContentType "application/json" -Body $body
+  "--- $($png.Name) ---"; $r.text
+}
+$out | Set-Content ./ocr.txt -Encoding utf8
+pdf-cli convert --input ./ocr.txt --output searchable.pdf
+```
+
+Two details worth knowing:
+
+- **`Invoke-WebRequest -InFile` with `-ContentType "multipart/form-data"` fails with 400** —
+  PowerShell does not build a real multipart body. Either use `curl.exe -F` (as above) or
+  post raw bytes / base64. The `400` is the client's fault, not the service's.
+- **You get a rebuilt text PDF, not the original scan.** The OCR service returns plain
+  text, so `convert` produces a fresh PDF containing that text as real, selectable text —
+  `extract` and `search` read it back fine, but the original page images and layout are
+  gone. If you need the scan's appearance kept, OCR the pages for text and keep the
+  `pdf-to-image` output as the visual side; assembling the two into one invisible-text-
+  over-image PDF is not something pdf-cli does.
+
+### Health check before use
+
+A failure to start is silent from the client side, so probe before a batch:
+
+```powershell
+try   { (Invoke-RestMethod "http://127.0.0.1:18004/health").status }  # "ok"
+catch { "OCR service is not running - start ocr-rust.exe first" }
+```
+
+Never let a missing OCR service turn into "the document is empty": that is exactly the
+failure mode `extract` refuses to produce.
+
 ## Agent Workflow Examples
 
 User: "把这个PDF加页码"
@@ -351,9 +506,9 @@ pdf-cli extract-images --input doc.pdf --output-dir ./imgs --json
 
 User: "这是扫描件，帮我识别文字"
 ```powershell
-# pdf-cli has no OCR. Render the pages, hand them to your OCR tool, then re-import.
+# pdf-cli has no OCR. Render the pages, hand them to the local OCR service, then re-import.
 pdf-cli pdf-to-image --input scan.pdf --output-dir ./pages --width 2400 --json
-#  → OCR ./pages/*.png with a dedicated tool
+#  -> POST each page to http://127.0.0.1:18004/ocr/raw (see the OCR section)
 pdf-cli convert --input ocr.txt --output recognised.pdf --json
 ```
 
@@ -415,8 +570,9 @@ pdf-cli merge --input "cover.pdf,ch1.pdf,ch2.pdf" --output report.pdf --json
 ```
 
 User: "这个扫描件识别完还要能搜索"
-Use an OCR tool that emits a searchable PDF (image + invisible text layer), then read it
-back with pdf-cli — `extract` and `search` work on it directly:
+The bundled OCR service returns plain text, not a searchable PDF, so rebuild one with
+`convert` and search that. If you use an OCR tool that does emit a searchable PDF
+(image + invisible text layer), read it back directly - `extract` and `search` work on it:
 ```powershell
 pdf-cli search --input recognised.pdf --pattern "invoice total" --json
 ```
@@ -446,8 +602,8 @@ text *into* PDFs and does not read PDFs at all.
 ## Limitations
 
 - **No OCR.** pdf-cli never recognises text from images. It says so explicitly (empty text
-  layer → `OPERATION_FAILED`) rather than returning empty output, so compose it with a
-  dedicated OCR tool when you hit a scan.
+  layer -> `OPERATION_FAILED`) rather than returning empty output. Pair it with the local
+  OCR service documented above (`ocr-rust.zip`) when you hit a scan.
 - `pdf-to-image` requires `pdfium.dll` (not bundled). `search`, `form`, `diff` and
   `to-markdown` use it when present and degrade gracefully without it — except `form`,
   which needs it outright.

@@ -125,6 +125,11 @@ v0.2.0 曾实现 `ocr`（pdfium 渲染 → POST 给 ocr-rust 服务），v0.3.1 
 **组合优于内置**：需要扫描件文字时，用 `pdf-to-image` 渲染，交给专用 OCR 工具，
 再把结果交给 `convert`（文本 → PDF），或直接读回 OCR 工具产出的可搜索 PDF。
 
+现成的 OCR 服务已经准备好，不需要自己搭：
+<https://cnb.cool/free_llm/vibe-coding/pdf-cli/-/releases/download/skill/ocr-rust.zip>
+解压后运行 `ocr-rust.exe` 即监听 `127.0.0.1:18004`；端点与示例见 SKILL.md 的
+「OCR — get a local OCR service」一节。它不是 pdf-cli 的一部分，只是配套发布的独立服务。
+
 保留的契约是**不静默失败**：`extract` / `search` / `to-markdown` 遇到无文字层时
 返回 `OPERATION_FAILED` 并说明是扫描件，而不是给一个空字符串的成功结果——
 这样调用方知道该去换工具，而不是以为文件本来就是空的。
