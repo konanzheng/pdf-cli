@@ -244,9 +244,13 @@ Most commands are pure Rust. External needs:
 |---|---|
 | `web-to-pdf` | Microsoft Edge (auto-detected; `--edge-path`) |
 | `pdf-to-image` | `pdfium.dll` (`--pdfium-path`) |
-| `to-markdown`, `search`, `form` | `pdfium.dll` for geometry; `form` always |
+| `to-markdown`, `form` | `pdfium.dll` — required (both are geometry-driven, no fallback) |
+| `search`, `diff --mode render` | `pdfium.dll` for geometry; degrade without it (`search` sets `geometry_available: false`) |
 
 `pdfium.dll`: download from <https://github.com/bblanchon/pdfium-binaries/releases>.
+
+There is **no built-in lookup** of `testdata\pdfium\bin`: pass `--pdfium-path`, or put
+`pdfium.dll` next to `pdf-cli.exe` / on the system library path.
 
 ## No OCR, by design
 
@@ -272,23 +276,32 @@ src/
 ├── main.rs            # CLI entry point (clap command definitions)
 ├── error.rs           # Structured error type + JSON serialization
 ├── output.rs          # Unified text/JSON result envelope
+├── io.rs              # Input resolution: single-document vs batch expansion
+├── font.rs            # CJK TrueType subsetting + /ToUnicode (pagenum, convert)
 └── commands/
-    ├── convert.rs        # images / md / txt -> PDF
-    ├── webpdf.rs         # URL / HTML / SVG / image -> PDF (headless Edge)
-    ├── pdf2img.rs        # PDF -> PNG / JPEG (pdfium)
-    ├── invoice.rs        # A4 2-up tiling
-    ├── pagenum.rs        # page numbers
-    ├── meta.rs           # metadata editing
-    ├── extract_images.rs # embedded image extraction
-    ├── extract.rs        # text extraction
-    ├── pages.rs          # merge / split / delete-pages / rotate
-    ├── watermark.rs      # text watermark add + burned-in watermark remove
-    ├── security.rs       # encrypt / decrypt
-    ├── optimize.rs       # compress
-    ├── info.rs           # metadata
-    └── doctor.rs         # structural analysis
+│   ├── convert.rs        # images / md / txt -> PDF
+│   ├── webpdf.rs         # URL / HTML / SVG / image -> PDF (headless Edge)
+│   ├── pdf2img.rs        # PDF -> PNG / JPEG (pdfium)
+│   ├── invoice.rs        # A4 2-up tiling
+│   ├── pagenum.rs        # page numbers
+│   ├── meta.rs           # metadata editing
+│   ├── extract_images.rs # embedded image extraction
+│   ├── extract.rs        # text extraction
+│   ├── search.rs         # text search with page / bbox / context
+│   ├── to_markdown.rs    # PDF -> Markdown for LLMs
+│   ├── diffcmd.rs        # text diff and rendered-pixel diff
+│   ├── form.rs           # AcroForm list / set / flatten
+│   ├── crop.rs           # CropBox editing + content auto-detection
+│   ├── organize.rs       # reorder / duplicate / drop / insert pages
+│   ├── pages.rs          # merge / split / delete-pages / rotate
+│   ├── watermark.rs      # text watermark add + burned-in watermark remove
+│   ├── security.rs       # encrypt / decrypt
+│   ├── optimize.rs       # compress
+│   ├── info.rs           # metadata
+│   └── doctor.rs         # structural analysis
 tests/
-    └── smoke_test.ps1    # self-contained end-to-end smoke test
+├── smoke_test.ps1    # self-contained end-to-end smoke test
+└── contract_test.ps1 # CLI contract checks (flags, error codes, --json shape)
 ```
 
 ## Limitations

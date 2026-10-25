@@ -4,6 +4,15 @@
 > 结论优先：**先做 4 个"AI 原生"命令（search / pdf→markdown / diff / form），
 > 而不是去补 iLovePDF 的 Office 转换全家桶。**
 
+> **本文是 2025 年的调研快照，不是当前实现状态。**
+> 第 2 节的「❌ 无」记录的是调研当时的事实；此后 `search` / `to-markdown` / `diff` /
+> `form` / `crop` / `organize` 以及批处理、`-` 标准流都已落地，`ocr` 则是实现后又移除。
+> 想了解现在能做什么，看 README 与 SKILL.md；本文的价值在于**选型理由**（为什么做这些、
+> 为什么不做那些），而不是功能清单。
+> 第 4 节里的 JSON 示例是设计草案，字段名与真实输出有出入：`search` 实际返回 `hits`
+> （不是 `matches`）、`total_matches`，`bbox` 是 `{x,y,width,height}` 对象（不是四元数组），
+> 也没有 `--keep-images`。真实契约以 SKILL.md 为准。
+
 ---
 
 ## 1. iLovePDF 的能力全貌（真实盘点）
@@ -45,29 +54,29 @@
 
 | 能力 | pdf-cli | 说明 |
 |---|---|---|
-| merge / split / delete-pages / rotate | ✅ | `split` 只支持 ranges + 逐页，缺 `--every N` / 奇偶 / 按大小 |
+| merge / split / delete-pages / rotate | ✅ | `split` 支持 ranges / `--every N` / `--odd-even`；仍缺按大小切分（`--max-size`，v0.4） |
 | pdf→image | ✅ | pdfium 渲染 |
 | extract-images | ✅ | 原图直抽，比 iLovePDF 的 `extract` 模式更细（`--min-size`） |
-| compress | ⚠️ | 只有 `prune + recompress`，**`--level` 三档参数当前是装饰性的**（实测 extreme 与 low 输出字节一致） |
+| compress | ⚠️ | 三档已能产出不同体积（实测 low/medium/extreme 依次更小），但仍只是"丢弃对象 + 重压缩"，没有真正的图像降采样 |
 | ocr | ❌ | 不做。OCR 是独立工具的职责，pdf-cli 只保留无文字层时报错这一契约（曾实现，v0.3.2 移除） |
 | watermark add/remove | ✅ | 文本水印；另有 iLovePDF 完全没有的"烧录水印去除" |
-| pagenum | ⚠️ | 只有 Helvetica + WinAnsi，**中文页码实测输出乱码**（`第 1 页` → `ç¬¬ 1 é¡µ`） |
+| pagenum | ✅ | 中文字体子集 + `/ToUnicode` 已实现，`extract` 可读回页码（早期乱码问题已修复） |
 | meta / info / doctor | ✅ | `doctor` 是差异化亮点 |
 | encrypt / decrypt | ⚠️ | lopdf 只走 RC4(128)，AES-256(R6) 文件打不开 |
 | convert（图/md/txt→pdf）| ✅ | 纯 Rust，无 Office |
 | web-to-pdf | ✅ | headless Edge |
-| **search** | ❌ | 无 |
-| **pdf→markdown** | ❌ | 无 |
-| **crop** | ❌ | 无 |
-| **reorder / organize** | ❌ | 无 |
-| **diff / compare** | ❌ | 无 |
+| **search** | ✅ 已实现 | 调研时无；现已支持正则/字面、bbox、上下文 |
+| **pdf→markdown** | ✅ 已实现 | 即 `to-markdown`，doc/plain 两模式 |
+| **crop** | ✅ 已实现 | `--box` 显式框 / `--auto` 内容检测 |
+| **reorder / organize** | ✅ 已实现 | `organize`：重排/复制/丢弃/插入 |
+| **diff / compare** | ✅ 已实现 | 文本与渲染像素两种模式 |
 | **redact** | ❌ | 无 |
-| **form（检测/填写/展平）** | ❌ | ROADMAP 里明确"不做" |
+| **form（检测/填写/展平）** | ✅ 已实现 | 早期判断「不做」已被推翻 |
 | **repair** | ❌ | 无 |
 | **pdf→pdfa** | ❌ | 无 |
 | **pdf→word/ppt/excel** | ❌ | ROADMAP 明确"不做"（保真度）|
-| **批量/递归/通配符** | ❌ | 所有命令单文件、`--input "a,b"` 逗号拼接 |
-| **stdin/stdout 管道** | ❌ | 实测 `--input -` 直接报 FILE_NOT_FOUND |
+| **批量/递归/通配符** | ✅ 部分 | 逗号列表/目录/glob 已支持；`--recursive` 仍在计划中 |
+| **stdin/stdout 管道** | ✅ 已实现 | `--input -` / `--output -` |
 
 ---
 
@@ -81,7 +90,7 @@ iLovePDF 是**人点鼠标**的产品，pdf-cli 是**Agent 调用**的工具。�
 | **S2 无需人眼** | 不依赖人类审美判断 | "edit pdf 拖放排版" |
 | **S3 信息密度高** | 把非结构化 PDF 变结构化数据，省 Agent 的 token | `doctor` 就是正例 |
 | **S4 纯本地** | 不上传云端 = 隐私 + 无额度 + 可离线 | 翻译/摘要必然要调模型，但它可以调**本地**模型 |
-| **S5 组合性好** | 输出能直接喂给下一条命令 | `search --json` → `crop/redact --pages` |
+| **search** | ✅ 已实现 | 调研时无；现已支持正则/字面、bbox、上下文 |
 
 按这 5 条打分（★ 越多越该做）：
 
@@ -111,7 +120,7 @@ iLovePDF 是**人点鼠标**的产品，pdf-cli 是**Agent 调用**的工具。�
 
 ## 4. 建议新增功能（按优先级）
 
-### P0-1 `search` — 正则/字面量检索，返回坐标与上下文
+### P0-1 `search` — 正则/字面量检索，返回坐标与上下文 （✅ 已实现）
 
 最高性价比。`extract` 只给整篇文本，Agent 想知道"这句话在第几页、什么位置"必须靠猜。
 iLovePDF 没有这个工具，但它是 Anthropic/OpenAI 文档工具链里使用频率最高的原语。
@@ -137,7 +146,7 @@ pdf-cli search --input doc.pdf --pattern "发票号码[:：]\s*(\d+)" --regex --
 
 **为什么给 AI**：`grep` 的语义 Agent 天生会用；有了 bbox，`redact`/`crop`/`watermark` 就能精确落点。
 
-### P0-2 `to-markdown` — PDF → 结构化 Markdown
+### P0-2 `to-markdown` — PDF → 结构化 Markdown （✅ 已实现）
 
 iLovePDF 把它当付费 AI 卖点，但**90% 的工作是确定性排版还原**：按字号聚类成标题层级、
 按 x 缩进判断列表、按 ruling line 拼表格。这正是 Agent 最缺的"喂给模型的干净输入"。
@@ -157,7 +166,7 @@ pdf-cli to-markdown --input doc.pdf --pages 1-10 --keep-images ./assets --json
 **为什么给 AI**：这是 token 效率最高的 PDF 读入格式，且**完全离线、可复现**。
 比 `extract` 强在"结构"，比"AI 转换"强在"免费且确定性"。
 
-### P0-3 `diff` — 两版 PDF 结构化对比
+### P0-3 `diff` — 两版 PDF 结构化对比 （✅ 已实现）
 
 ROADMAP 里已标 P1（"最高需求、工具稀缺"），这里给出**可判定**的输出契约：
 
@@ -179,7 +188,7 @@ pdf-cli diff --input old.pdf --input2 new.pdf --mode render --output-dir ./diff
 **为什么给 AI**：Agent 校验"我改的文件是否只改了该改的"，这是**自动化闭环的验收开关**。
 没有 `diff`，AI 改 PDF 就是盲操作。
 
-### P0-4 地基改造（不是新命令，但决定上限）
+### P0-4 地基改造（不是新命令，但决定上限） （✅ 已实现）
 
 这三件事比多加三个命令更值钱：
 
@@ -195,7 +204,7 @@ pdf-cli diff --input old.pdf --input2 new.pdf --mode render --output-dir ./diff
 3. **`--dry-run` 补齐**：`extract` / `info` / `doctor` 当前没有 dry_run 分支（只读命令可忽略），
    但 `merge`/`split` 的 dry-run 只报数量、不报**将写入的文件名**——Agent 需要预知落盘路径。
 
-### P1-1 `form` — 表单域检测 / 填写 / 展平
+### P1-1 `form` — 表单域检测 / 填写 / 展平 （✅ 已实现）
 
 ROADMAP 写"不做"的理由是"需 pdfium 表单 API"。但 `pdfium-render` **已经暴露了**：
 `PdfFormField` + `as_text_field_mut().set_value()`、`as_checkbox_field_mut().set_checked()`、
@@ -211,7 +220,7 @@ pdf-cli form --input filled.pdf --flatten --output flat.pdf
 
 **建议推翻 ROADMAP 的"不做"结论**：成本低于 `pdf→word`，价值高于 `grayscale`。
 
-### P1-2 `crop`
+### P1-2 `crop` （✅ 已实现）
 
 ```
 pdf-cli crop --input doc.pdf --box 40,40,-40,-40 --output cropped.pdf      # 四边内缩 pt
@@ -221,7 +230,7 @@ pdf-cli crop --input scan.pdf --auto --json                                # 自
 `--auto` 用 pdfium 渲染低分辨率页 → 找非白像素包围盒，**无 pdfium 时退化为 `--box` 必填**。
 扫描件去白边是 OCR 前的标准动作，Agent 流水线会用。
 
-### P1-3 `organize` — 页面重排/复制/插入
+### P1-3 `organize` — 页面重排/复制/插入 （✅ 已实现）
 
 ```
 pdf-cli organize --input doc.pdf --order 3,1,2,1-5,3 --output out.pdf
@@ -230,7 +239,7 @@ pdf-cli organize --input doc.pdf --insert 2:cover.pdf --output out.pdf
 `--order` 复用现有页码语法并扩展（允许重复 → 实现"复制页"），
 这比 `reorder` + `insert` 两个命令更省心，也贴合 iLovePDF 的 Organize 心智模型。
 
-### P1-4 `split` 补齐三模式 + `merge` 保书签
+### P1-4 `split` 补齐三模式 + `merge` 保书签 （✅ 部分：`split` 三模式与 `merge` 保书签已实现；`--max-size` 仍在 v0.4）
 
 - `--every N`（每 N 页一份）、`--odd-even`（双面扫描拆分）、`--max-size`（按体积切，iLovePDF 的 `filesize` 模式）
 - `merge` 迁移大纲：`lopdf` 有 `outlines.rs` / `toc.rs`，可读取每个源 PDF 的 `Outlines` 并按页偏移重写到合并文档
@@ -251,7 +260,7 @@ OCR 工具产出的可搜索 PDF。保留的契约是无文字层时报错而非
 
 | 功能 | 说明 | 注意 |
 |---|---|---|
-| `redact` | 按 `search` 的 bbox 涂黑并**真删**内容流对象 | 必须同时删文本，否则等于没删；用 `--verify` 复检 |
+| **search** | ✅ 已实现 | 调研时无；现已支持正则/字面、bbox、上下文 |
 | `repair` | `qpdf`/`mutool` 无纯 Rust 等价物；先做"宽松解析 + 忽略坏对象重建 xref" | 成功率有限，务必 `--report` 说明修了什么 |
 | `pdf→pdfa` | 需嵌入 ICC + 字体嵌入 + 禁透明度 | 工作量大，先做 `--font` 字体嵌入更划算 |
 | `encrypt` AES-256 | lopdf 的 V5/R6 已实现，但当前命令可能只走 RC4 | 先查清 `security.rs` 用了哪档，补 `--aes256` |

@@ -148,7 +148,7 @@ cargo check 2>&1 | Select-String "^(error|warning: unused)"
 ```
 
 **注意**：多个 agent 共享同一个 target 目录，`cargo check` 可能输出 `Blocking waiting for file lock`
-（正常，等即可），也可能报出**其它 agent 文件**里的错误——那是别人的问题，你只需要让自己的文件零错误零警告。
+（正常，等即可），也可能报出**其他 agent 文件**里的错误——那是别人的问题，你只需要让自己的文件零错误零警告。
 如果你的文件出现 `unused` 警告，要么用起来，要么删掉。
 
 同时确认 CJK 内容没有乱码（写文件时务必 UTF-8 无 BOM）：
@@ -161,7 +161,7 @@ cargo check 2>&1 | Select-String "^(error|warning: unused)"
 ## 7. 测试素材
 
 `testdata\` 下已有：`txt.pdf`（纯文本小文件）、`numbered.pdf`（多页）、`web.pdf`（32 KB 内容较多）、
-`inv2.pdf`/`inv3.pdf`（发票）、`enc.pdf`（加密，密码见 README）、`meta.pdf`、`rotated.pdf`、
+`inv2.pdf`/`inv3.pdf`（发票）、`enc.pdf`（加密）、`meta.pdf`、`rotated.pdf`、
 `merged.pdf`、`img.pdf`、`svg.pdf`、`html.pdf`、`ocr_sample.pdf`（扫描件，无文本层）、
 `small.pdf`、`wm.pdf`。
 

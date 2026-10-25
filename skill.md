@@ -231,7 +231,8 @@ returns `OPERATION_FAILED` with an explanation instead of writing an unchanged f
 pdf-cli encrypt --input doc.pdf --user-password secret --output locked.pdf
 pdf-cli decrypt --input locked.pdf --password secret --output unlocked.pdf
 ```
-Wrong password -> `PASSWORD_REQUIRED`.
+A wrong password returns `WRONG_PASSWORD`; omitting `--password` on `decrypt`
+returns `MISSING_ARG`.
 
 ### compress
 ```
@@ -428,8 +429,14 @@ pdf-cli split --input doc.pdf --every 10 --output-dir ./parts --json
 
 User: "这个中文PDF转成文本但中文都变方框了"
 ```powershell
-pdf-cli convert --input doc.pdf --output doc.txt --font "C:\Windows\Fonts\simhei.ttf" --json
+pdf-cli extract --input doc.pdf --output doc.txt --json
 ```
+`extract` reads the text layer straight out of the PDF, so it never re-renders CJK
+characters and cannot produce boxes. Boxes mean the *source* PDF has no usable
+`/ToUnicode` map: the glyphs are there, but the mapping back to characters is not.
+pdf-cli cannot recover a missing map. Run `doctor` to see the font list, or treat the
+file as an image (`pdf-to-image`). Note that `convert` cannot help here - it writes
+text *into* PDFs and does not read PDFs at all.
 
 ## Safety
 
