@@ -3,11 +3,10 @@ use crate::io;
 use crate::output::CommandResult;
 
 pub fn run(input: &str) -> Result<CommandResult, PdfError> {
-    if !std::path::Path::new(input).exists() {
-        return Err(PdfError::FileNotFound {
-            path: input.to_string(),
-        });
-    }
+    // No local existence check here: `io::load_doc_path` resolves files,
+    // directories and globs through `expand_inputs`, and reports a glob or
+    // directory that matches several files as an actionable error. A bare
+    // `Path::exists()` would reject those inputs before they are expanded.
 
     let doc = io::load_doc_path(input)?;
 
@@ -41,8 +40,16 @@ pub fn run(input: &str) -> Result<CommandResult, PdfError> {
         })
         .unwrap_or(serde_json::json!({}));
 
+    // Report the path the input actually resolved to alongside the raw argument:
+    // with a glob or a directory the two differ, and an agent that echoes `file`
+    // back into a later command needs the concrete path.
+    let resolved = io::resolve_input_once(input)
+        .map(|p| io::path_to_arg(&p))
+        .unwrap_or_else(|_| input.to_string());
+
     let details = serde_json::json!({
         "file": input,
+        "resolved": resolved,
         "pages": page_count,
         "encrypted": encrypted,
         "pdf_version": version,

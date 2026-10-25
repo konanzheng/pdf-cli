@@ -82,8 +82,17 @@ Every command accepts the global flags `--json`, `--dry-run`, and `--quiet`.
 ```
 
 Error codes: `FILE_NOT_FOUND`, `UNSUPPORTED_FORMAT`, `PARSE_FAILED`,
-`PASSWORD_REQUIRED`, `OPERATION_FAILED`, `INVALID_PAGE_RANGE`, `MISSING_ARG`,
-`BROWSER_NOT_FOUND`.
+`PASSWORD_REQUIRED`, `WRONG_PASSWORD`, `INVALID_PAGE_RANGE`, `MISSING_ARG`,
+`OPERATION_FAILED`, `BROWSER_NOT_FOUND`, `PDFIUM_NOT_FOUND`.
+
+Global output flags:
+
+| Flag | Effect |
+|---|---|
+| `--json` | One pretty-printed JSON object on stdout |
+| `--json-lines` | One **compact** JSON object per line, for line-oriented consumers |
+| `--quiet` | Suppress the human-readable summary; machine output is never suppressed |
+| `--dry-run` | Report what would happen, write nothing |
 
 ### Shared input rules
 
@@ -96,7 +105,19 @@ These apply to every command that takes `--input`:
 | `--input docs/` | Every `*.pdf` in the directory (sorted) |
 | `--input "docs/**/*.pdf"` | A glob, expanded recursively |
 
-`--output -` writes the result to **stdout** (for `extract`, `to-markdown`, `search`).
+Commands split into two families, and the difference matters when a pattern matches
+more than one file:
+
+- **Single-document commands** (`info`, `crop`, `form`, `pagenum`, `diff`, …) read one
+  document. A directory or glob matching several files fails with `OPERATION_FAILED`
+  naming how many matched, rather than quietly picking one.
+- **Batch commands** (`extract`, `convert`, `merge`) accept several documents at once,
+  either as a comma list (`--input a.pdf,b.pdf`) or as a directory/glob that expands
+  into one.
+
+`--output -` writes the result to **stdout**. It cannot be combined with `--json` or
+`--json-lines`: both would write to stdout, and the stream would be neither valid JSON
+nor clean text. That combination is rejected up front with `OPERATION_FAILED`.
 
 `--password` is a **global** flag: place it before or after the subcommand and it
 applies to any encrypted input.

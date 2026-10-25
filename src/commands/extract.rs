@@ -8,6 +8,71 @@ pub fn run(
     pages: Option<&str>,
     password: Option<&str>,
 ) -> Result<CommandResult, PdfError> {
+    // A batch of documents (`a.pdf,b.pdf`, a directory, or a glob) is processed
+    // document by document. The merged text is the payload, and per-document
+    // results are reported in `documents` so a batch run stays inspectable.
+    let files = io::expand_batch(input)?;
+
+    if files.len() == 1 {
+        let single = io::path_to_arg(&files[0]);
+        return run_one(&single, output, pages, password);
+    }
+
+    let mut combined: Vec<String> = Vec::new();
+    let mut documents: Vec<serde_json::Value> = Vec::new();
+    let mut total_chars = 0usize;
+
+    for path in &files {
+        let one = io::path_to_arg(path);
+        // Fail loudly per document: a batch that silently skips a bad file would
+        // let an agent believe it saw the whole set.
+        let r = run_one(&one, None, pages, password)?;
+        let text = r.output.clone().unwrap_or_default();
+        total_chars += r.details["char_count"].as_u64().unwrap_or(0) as usize;
+        documents.push(serde_json::json!({
+            "source": r.details["source"],
+            "char_count": r.details["char_count"],
+            "page_count": r.details["page_count"],
+            "empty_pages": r.details["empty_pages"],
+        }));
+        combined.push(text);
+    }
+
+    let joined = combined.join("\n\n");
+    let mut details = serde_json::json!({
+        "source": input,
+        "document_count": files.len(),
+        "char_count": total_chars,
+        "documents": documents,
+    });
+
+    match output {
+        Some(out_path) if io::is_stdio(out_path) => {
+            details["output"] = serde_json::json!("-");
+            Ok(CommandResult::ok("extract", Some(joined), details))
+        }
+        Some(out_path) => {
+            io::write_text(out_path, &joined)?;
+            details["output"] = serde_json::json!(out_path);
+            Ok(CommandResult::ok(
+                "extract",
+                Some(format!(
+                    "Extracted {total_chars} chars from {} documents → {out_path}",
+                    files.len()
+                )),
+                details,
+            ))
+        }
+        None => Ok(CommandResult::ok("extract", Some(joined), details)),
+    }
+}
+
+fn run_one(
+    input: &str,
+    output: Option<&str>,
+    pages: Option<&str>,
+    password: Option<&str>,
+) -> Result<CommandResult, PdfError> {
     // Loading through `io::load_doc` gives us the right error for encrypted
     // inputs (`PASSWORD_REQUIRED` / `WRONG_PASSWORD`) instead of a generic
     // parse failure, and supports `--input -` via stdin.
@@ -51,7 +116,7 @@ pub fn run(
         });
     }
 
-    let details = serde_json::json!({
+    let mut details = serde_json::json!({
         "source": if io::is_stdio(input) { "stdin" } else { input },
         "char_count": char_count,
         "pages_requested": selected,
@@ -60,23 +125,22 @@ pub fn run(
     });
 
     match output {
+        Some(out_path) if io::is_stdio(out_path) => {
+            // `--output -` and "no --output" both mean "the text is the result".
+            // main() rejects `--output -` combined with `--json`/`--json-lines`,
+            // so stdout carries either the text or the envelope, never both.
+            details["output"] = serde_json::json!("-");
+            Ok(CommandResult::ok("extract", Some(final_text), details))
+        }
         Some(out_path) => {
             io::write_text(out_path, &final_text)?;
-            let mut details = details;
             details["output"] = serde_json::json!(out_path);
             Ok(CommandResult::ok(
                 "extract",
-                Some(format!(
-                    "Extracted {} chars → {}",
-                    char_count, out_path
-                )),
+                Some(format!("Extracted {char_count} chars → {out_path}")),
                 details,
             ))
         }
-        None => Ok(CommandResult::ok(
-            "extract",
-            Some(final_text),
-            details,
-        )),
+        None => Ok(CommandResult::ok("extract", Some(final_text), details)),
     }
 }

@@ -309,8 +309,70 @@ pub fn expand_inputs(input: &str) -> Result<Vec<PathBuf>, PdfError> {
     })
 }
 
+/// Render a resolved path back into the `&str` form the command runners accept.
+///
+/// Batch expansion hands commands a `PathBuf`, but every runner takes `&str`
+/// (so that `-` for stdio and glob-looking strings stay representable). This
+/// keeps that conversion explicit and in one place. A path that is not valid
+/// UTF-8 falls back to its lossy form rather than failing: the bytes still name
+/// the same file on every platform we support, and the caller only opens it.
+pub fn path_to_arg(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+/// Public wrapper over single-input resolution, for callers that want to report
+/// which concrete file an argument (file / directory / glob) actually named.
+pub fn resolve_input_once(input: &str) -> Result<PathBuf, PdfError> {
+    resolve_single_input(input)
+}
+
 fn looks_like_glob(s: &str) -> bool {
     s.contains('*') || s.contains('?') || s.contains('[')
+}
+
+/// Split a `--input` value into the individual documents a multi-file command
+/// should process.
+///
+/// Unlike [`expand_inputs`] (which answers "what does this one path refer to"),
+/// this is the entry point for commands that genuinely accept a batch: it
+/// combines three syntaxes that agents reach for interchangeably —
+///
+/// * a comma-separated list: `a.pdf,b.pdf`
+/// * a directory: every `*.pdf` directly inside it
+/// * a glob: `docs/*.pdf`
+///
+/// A plain single file yields a one-element vector. Repeated/duplicate paths are
+/// collapsed while preserving first-seen order, so `merge --input a.pdf,a.pdf`
+/// still merges two copies (callers that care about duplicates should not use
+/// this) — resolution here is about *locating* inputs, not de-duplicating them.
+pub fn expand_batch(input: &str) -> Result<Vec<PathBuf>, PdfError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(PdfError::MissingArg {
+            arg: "input".into(),
+            example: "pdf-cli merge --input a.pdf,b.pdf --output merged.pdf".into(),
+        });
+    }
+
+    // A single path that happens to resolve (file / dir / glob) is one batch token.
+    let mut out: Vec<PathBuf> = Vec::new();
+    for token in trimmed.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            return Err(PdfError::MissingArg {
+                arg: "input".into(),
+                example: "pdf-cli merge --input a.pdf,b.pdf --output merged.pdf".into(),
+            });
+        }
+        out.extend(expand_inputs(token)?);
+    }
+
+    if out.is_empty() {
+        return Err(PdfError::Operation {
+            reason: format!("No PDF files matched: {input}"),
+        });
+    }
+    Ok(out)
 }
 
 fn is_pdf_path(p: &Path) -> bool {

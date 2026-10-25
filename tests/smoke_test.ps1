@@ -1,4 +1,4 @@
-# pdf-cli smoke test — self-contained end-to-end check of every command.
+﻿# pdf-cli smoke test — self-contained end-to-end check of every command.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File tests\smoke_test.ps1
@@ -95,6 +95,40 @@ Check "convert single" ($r.success -and $r.details.pages_created -eq 1) "pages=$
 $r = RJ @('convert','--input',"$img1,$img2",'--output',$c2)
 Check "convert multi" ($r.success -and $r.details.pages_created -eq 2) "pages=$($r.details.pages_created)"
 
+# --- text input, CJK font embedding, BOM handling ---
+$noBom = New-Object System.Text.UTF8Encoding($false)
+$withBom = New-Object System.Text.UTF8Encoding($true)
+$asciiTxt = Join-Path $work "ascii.txt"
+[System.IO.File]::WriteAllText($asciiTxt, "Plain ASCII text.`r`nSecond line.", $noBom)
+$r = RJ @('convert','--input',$asciiTxt,'--output',(Join-Path $work "ascii.pdf"))
+Check "convert ASCII needs no --font" ($r.success -and $r.details.font_embedded -eq $false) "font_embedded=$($r.details.font_embedded)"
+
+$bomTxt = Join-Path $work "bom.txt"
+[System.IO.File]::WriteAllText($bomTxt, "BOM-prefixed ASCII text.", $withBom)
+$r = RJ @('convert','--input',$bomTxt,'--output',(Join-Path $work "bom.pdf"))
+Check "convert strips a UTF-8 BOM instead of rejecting it" ($r.success -and $r.details.bom_stripped -eq $true) "bom_stripped=$($r.details.bom_stripped)"
+
+$cjkTxt = Join-Path $work "cjk.txt"
+[System.IO.File]::WriteAllText($cjkTxt, "你好，世界！`r`n这是一个中文测试。", $noBom)
+# Non-ASCII without a font cannot be rendered, so it must fail loudly rather than
+# silently emit a document full of blanks.
+$r = RJ @('convert','--input',$cjkTxt,'--output',(Join-Path $work "cjk_nofont.pdf"))
+Check "convert CJK without --font fails clearly" ($r.error) "code=$($r.code)"
+
+$cjkFont = "C:\Windows\Fonts\simhei.ttf"
+if (Test-Path $cjkFont) {
+    $cjkPdf = Join-Path $work "cjk.pdf"
+    $r = RJ @('convert','--input',$cjkTxt,'--output',$cjkPdf,'--font',$cjkFont)
+    Check "convert CJK with --font embeds it" ($r.success -and $r.details.font_embedded -eq $true -and $r.details.glyphs_subset -gt 0) "glyphs=$($r.details.glyphs_subset)"
+    # The real acceptance test: the characters must survive a round-trip.
+    $back = (& $dbg extract --input $cjkPdf 2>$null | Out-String)
+    Check "convert CJK round-trips through extract" ($back -match '你好，世界') "got=$($back.Trim())"
+    $s = RJ @('search','--input',$cjkPdf,'--pattern','你好')
+    Check "convert CJK is searchable" ($s.success -and $s.details.total_matches -ge 1) "matches=$($s.details.total_matches)"
+} else {
+    Skip "convert CJK with --font" "simhei.ttf not present"
+}
+
 Write-Host "`n== info / doctor =="
 $r = RJ @('info','--input',$c2)
 Check "info pages" ($r.details.pages -eq 2) "pages=$($r.details.pages)"
@@ -102,11 +136,46 @@ $r = RJ @('doctor','--input',$c2)
 Check "doctor images" ($r.details.total_images -eq 2) "imgs=$($r.details.total_images)"
 
 Write-Host "`n== merge / split =="
+# A five-page document for the grouping strategies: repeat one page five times.
+$fivePdf = Join-Path $work "five.pdf"
+& $dbg organize --input $c1 --order "1,1,1,1,1" --output $fivePdf --quiet 2>$null | Out-Null
+
 $r = RJ @('merge','--input',"$c1,$c1",'--output',(Join-Path $work "m.pdf"))
 Check "merge" ($r.details.total_pages -eq 2) "pages=$($r.details.total_pages)"
 $r = RJ @('split','--input',$c2,'--output-dir',(Join-Path $work "split"))
 $n = @(Get-ChildItem (Join-Path $work "split\*.pdf") -ErrorAction SilentlyContinue).Count
 Check "split" ($n -eq 2) "files=$n"
+
+# split variants: --every groups by count, --odd-even separates the two sides.
+$evDir = Join-Path $work "split_every"
+$r = RJ (@('split','--input',$fivePdf,'--every','2','--output-dir',$evDir))
+$n = @(Get-ChildItem "$evDir\*.pdf" -ErrorAction SilentlyContinue).Count
+Check "split --every 2 on 5 pages -> 3 files" ($r.success -and $n -eq 3) "files=$n"
+Check "split --every reports strategy" ($r.details.strategy -eq 'every') "strategy=$($r.details.strategy)"
+
+$oeDir = Join-Path $work "split_oddeven"
+$r = RJ (@('split','--input',$fivePdf,'--odd-even','--output-dir',$oeDir))
+$n = @(Get-ChildItem "$oeDir\*.pdf" -ErrorAction SilentlyContinue).Count
+Check "split --odd-even -> 2 files (odd, even)" ($r.success -and $n -eq 2) "files=$n"
+
+# Two strategies at once is ambiguous, so it must be refused rather than guessed.
+$r = RJ (@('split','--input',$fivePdf,'--every','2','--odd-even','--output-dir',(Join-Path $work "split_both")))
+Check "split with two strategies -> clear error" ($r.error -or -not $r.success) "ok"
+
+# merge must carry the outline across, remapped onto the merged page numbers.
+# `testdata\outline.pdf` is a two-page document with two bookmarks; merging two
+# copies should produce one parent per file, each holding the original two.
+$outlinePdf = Join-Path $PSScriptRoot "..\testdata\outline.pdf"
+if (Test-Path $outlinePdf) {
+    $r = RJ (@('merge','--input',"$outlinePdf,$outlinePdf",'--output',(Join-Path $work "bm.pdf")))
+    Check "merge migrates an outline" ($r.success -and $r.details.outline_merged -eq $true) "outline_merged=$($r.details.outline_merged)"
+    Check "merge outline keeps every bookmark plus a parent per file" ($r.details.outline_items -eq 6) "items=$($r.details.outline_items)"
+    # A document with no outline must not gain an empty /Outlines key.
+    $r = RJ (@('merge','--input',"$c1,$c2",'--output',(Join-Path $work "noout.pdf")))
+    Check "merge of outline-free inputs reports no outline" ($r.success -and $r.details.outline_merged -eq $false) "outline_merged=$($r.details.outline_merged)"
+} else {
+    Skip "merge migrates an outline" "testdata\outline.pdf missing"
+}
 
 Write-Host "`n== delete-pages / rotate / pagenum =="
 $r = RJ @('delete-pages','--input',$c2,'--pages','1','--output',(Join-Path $work "del.pdf"))

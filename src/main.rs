@@ -53,6 +53,9 @@ enum Commands {
         page_size: String,
         #[arg(long, default_value_t = 11.0)]
         font_size: f32,
+        /// Embed a TrueType font (e.g. for Chinese text); omit for built-in Helvetica
+        #[arg(long)]
+        font: Option<String>,
     },
 
     /// Extract text from PDF
@@ -61,7 +64,7 @@ enum Commands {
         input: String,
         #[arg(long)]
         output: Option<String>,
-        #[arg(long)]
+        #[arg(long, allow_negative_numbers = true)]
         pages: Option<String>,
     },
 
@@ -74,13 +77,31 @@ enum Commands {
     },
 
     /// Split PDF into separate files
+    #[command(
+        long_about = "Split a PDF into several files.\n\n\
+            Choose one grouping strategy:\n  \
+            --ranges \"1-3,4-6\"  explicit groups (comma separated)\n  \
+            --every 2           fixed-size chunks of N pages\n  \
+            --odd-even          two files: odd pages, then even pages\n\n\
+            With no flag every page becomes its own file.\n\n\
+            Examples:\n  \
+            pdf-cli split --input in.pdf --output-dir out --every 10\n  \
+            pdf-cli split --input in.pdf --output-dir out --odd-even"
+    )]
     Split {
         #[arg(long)]
         input: String,
         #[arg(long)]
         output_dir: String,
+        /// Explicit page groups, e.g. "1-3,4-6"
         #[arg(long)]
         ranges: Option<String>,
+        /// Fixed chunk size: every N pages become one file
+        #[arg(long)]
+        every: Option<u32>,
+        /// Split into odd pages and even pages
+        #[arg(long, default_value_t = false)]
+        odd_even: bool,
     },
 
     /// Delete specific pages
@@ -99,7 +120,7 @@ enum Commands {
         input: String,
         #[arg(long)]
         angle: i32,
-        #[arg(long)]
+        #[arg(long, allow_negative_numbers = true)]
         pages: Option<String>,
         #[arg(long)]
         output: String,
@@ -135,7 +156,7 @@ enum Commands {
         #[arg(long, default_value_t = 12)]
         max_sat: u8,
         /// Page range, e.g. 1-3,5 (default: all)
-        #[arg(long)]
+        #[arg(long, allow_negative_numbers = true)]
         pages: Option<String>,
         /// JPEG re-encode quality (1-100)
         #[arg(long, default_value_t = 82)]
@@ -208,7 +229,7 @@ enum Commands {
         format: String,
         #[arg(long, default_value_t = 2000)]
         width: u32,
-        #[arg(long)]
+        #[arg(long, allow_negative_numbers = true)]
         pages: Option<String>,
         #[arg(long)]
         pdfium_path: Option<String>,
@@ -300,11 +321,17 @@ enum Commands {
         #[arg(long, default_value_t = 2000)]
         width: u32,
         /// Page range (default: all)
-        #[arg(long)]
+        #[arg(long, allow_negative_numbers = true)]
         pages: Option<String>,
         /// Explicit path to pdfium.dll
         #[arg(long)]
         pdfium_path: Option<String>,
+        /// OCR language hint passed to the service, e.g. "ch" or "eng+ch"
+        #[arg(long)]
+        lang: Option<String>,
+        /// Write a searchable PDF (recognised text laid under the image)
+        #[arg(long)]
+        output_pdf: Option<String>,
     },
 
     /// Search text in a PDF: regex/literal, page + bbox + context, JSON-first
@@ -331,7 +358,7 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         ignore_case: bool,
         /// Page range (default: all)
-        #[arg(long)]
+        #[arg(long, allow_negative_numbers = true)]
         pages: Option<String>,
         /// Characters of context to include around each hit
         #[arg(long, default_value_t = 40)]
@@ -364,7 +391,7 @@ enum Commands {
         #[arg(long)]
         output: Option<String>,
         /// Page range (default: all)
-        #[arg(long)]
+        #[arg(long, allow_negative_numbers = true)]
         pages: Option<String>,
         /// doc | plain
         #[arg(long, default_value = "doc")]
@@ -398,7 +425,7 @@ enum Commands {
         #[arg(long)]
         output: Option<String>,
         /// Page range applied to both files (default: all)
-        #[arg(long)]
+        #[arg(long, allow_negative_numbers = true)]
         pages: Option<String>,
         /// Render width in pixels for render mode
         #[arg(long, default_value_t = 1000)]
@@ -463,7 +490,7 @@ enum Commands {
         #[arg(long, default_value_t = 0.0)]
         margin: f32,
         /// Page range (default: all)
-        #[arg(long)]
+        #[arg(long, allow_negative_numbers = true)]
         pages: Option<String>,
         /// Path to pdfium.dll (required for --auto)
         #[arg(long)]
@@ -493,6 +520,37 @@ enum Commands {
     },
 }
 
+/// Which commands can send their primary payload to stdout via `--output -`.
+///
+/// These are the commands whose result is a document or a block of text rather
+/// than a status summary, so stdout is a plausible sink for them. Listing them
+/// explicitly keeps the `--output -` versus `--json` conflict check honest: a
+/// command that cannot stream to stdout is never falsely rejected.
+fn writes_payload_to_stdout(cmd: &Commands) -> bool {
+    match cmd {
+        // `--output` is a required String for these: compare directly.
+        Commands::Compress { output, .. }
+        | Commands::Decrypt { output, .. }
+        | Commands::Encrypt { output, .. }
+        | Commands::Rotate { output, .. }
+        | Commands::DeletePages { output, .. }
+        | Commands::Meta { output, .. }
+        | Commands::Pagenum { output, .. }
+        | Commands::WatermarkAdd { output, .. }
+        | Commands::WatermarkRemove { output, .. }
+        | Commands::Crop { output, .. }
+        | Commands::Organize { output, .. }
+        | Commands::Convert { output, .. }
+        | Commands::Merge { output, .. }
+        | Commands::Invoice { output, .. } => output == io::STDIO,
+        // `--output` is optional for these: absent means "result is the payload".
+        Commands::Extract { output, .. } | Commands::ToMarkdown { output, .. } => {
+            matches!(output.as_deref(), Some(io::STDIO))
+        }
+        _ => false,
+    }
+}
+
 fn main() {
     // clap builds the whole command tree with a deep recursive walk. With 26
     // subcommands that walk overflows the 1 MiB default main-thread stack in a
@@ -515,10 +573,36 @@ fn real_main() {
     let cli = Cli::parse();
     let json = cli.json;
     let dry_run = cli.dry_run;
-    let _quiet = cli.quiet;
-    let _json_lines = cli.json_lines;
+    let quiet = cli.quiet;
+    let json_lines = cli.json_lines;
     let password = cli.password.clone();
     io::set_global_password(password.as_deref());
+
+    // `--output -` streams a command's real payload to stdout. Combined with a
+    // machine-output mode, stdout would carry the payload *and* the envelope,
+    // producing a stream that is neither valid JSON nor clean text — a silent
+    // corruption that is very hard to debug from the caller's side. Reject the
+    // combination up front instead of emitting something unparseable.
+    if (json || json_lines) && writes_payload_to_stdout(&cli.command) {
+        let e = error::PdfError::Operation {
+            reason: "`--output -` streams the document to stdout, which conflicts with \
+                     `--json`/`--json-lines` writing the result envelope there.\n  \
+                     → Drop the machine-output flag, or write to a real file with --output <path>"
+                .into(),
+        };
+        if json_lines {
+            match serde_json::to_string(&e.to_json()) {
+                Ok(s) => println!("{s}"),
+                Err(err) => eprintln!("Failed to serialise error: {err}"),
+            }
+        } else {
+            match serde_json::to_string_pretty(&e.to_json()) {
+                Ok(s) => println!("{s}"),
+                Err(err) => eprintln!("Failed to serialise error: {err}"),
+            }
+        }
+        std::process::exit(1);
+    }
 
     let result: Result<CommandResult, error::PdfError> = match cli.command {
         Commands::Convert {
@@ -526,7 +610,15 @@ fn real_main() {
             output,
             page_size,
             font_size,
-        } => commands::convert::run(&input, &output, &page_size, font_size, dry_run),
+            font,
+        } => commands::convert::run(
+            &input,
+            &output,
+            &page_size,
+            font_size,
+            font.as_deref(),
+            dry_run,
+        ),
         Commands::Extract {
             input,
             output,
@@ -537,7 +629,16 @@ fn real_main() {
             input,
             output_dir,
             ranges,
-        } => commands::pages::split(&input, &output_dir, ranges.as_deref(), dry_run),
+            every,
+            odd_even,
+        } => commands::pages::split(
+            &input,
+            &output_dir,
+            ranges.as_deref(),
+            every,
+            odd_even,
+            dry_run,
+        ),
         Commands::DeletePages {
             input,
             pages,
@@ -675,6 +776,8 @@ fn real_main() {
             width,
             pages,
             pdfium_path,
+            lang,
+            output_pdf,
         } => commands::ocr::run(
             &input,
             output.as_deref(),
@@ -682,6 +785,8 @@ fn real_main() {
             width,
             pages.as_deref(),
             pdfium_path.as_deref(),
+            lang.as_deref(),
+            output_pdf.as_deref(),
             dry_run,
         ),
         Commands::Search {
@@ -808,12 +913,21 @@ fn real_main() {
 
     match result {
         Ok(r) => {
-            r.print(json);
+            r.print(json, quiet, json_lines);
             std::process::exit(0);
         }
         Err(e) => {
-            if json {
-                println!("{}", serde_json::to_string_pretty(&e.to_json()).unwrap());
+            if json || json_lines {
+                let payload = e.to_json();
+                let rendered = if json_lines {
+                    serde_json::to_string(&payload)
+                } else {
+                    serde_json::to_string_pretty(&payload)
+                };
+                match rendered {
+                    Ok(s) => println!("{s}"),
+                    Err(err) => eprintln!("Failed to serialise error: {err}"),
+                }
             } else {
                 eprintln!("Error: {}", e);
             }

@@ -10,16 +10,21 @@ Binary: `pdf-cli.exe`
   ```json
   {"success": true, "command": "info", "output": "human text", "details": {...}}
   ```
-- **`--dry-run`** (global) — preview, no writes.
-- **`--quiet`** (global) — suppress stderr progress.
+- **`--dry-run`** (global) — preview, no writes. `details.dry_run` is `true` and the
+  report is fully populated, so a dry run tells you exactly what a real run would do.
+- **`--quiet`** (global) — suppress the human-readable summary on **stdout**. Machine
+  output (`--json`, `--json-lines`) is never suppressed: silencing it would leave you
+  with no result at all.
 - **`--password <pwd>`** (global) — unlocks encrypted input for *every* command.
   Put it before or after the subcommand.
-- **`--json-lines`** (global) — emit one JSON object per line; use with
-  directory/glob inputs that process several files.
+- **`--json-lines`** (global) — one **compact** JSON object per line instead of a
+  pretty-printed object. Errors follow the same rule, so a pipeline can read one line
+  per result without a JSON parser that tolerates multi-line input.
 - Exit `0` = success, `1` = error. With `--json`, errors are:
   ```json
   {"error": true, "code": "FILE_NOT_FOUND", "message": "...\n  -> hint"}
   ```
+  Error JSON goes to **stdout**, human errors to **stderr**.
 
 Error codes: `FILE_NOT_FOUND`, `UNSUPPORTED_FORMAT`, `PARSE_FAILED`,
 `PASSWORD_REQUIRED`, `WRONG_PASSWORD`, `OPERATION_FAILED`, `INVALID_PAGE_RANGE`,
@@ -35,7 +40,21 @@ silently returning nothing.
 ### Input / output conventions
 
 `--input` accepts a file, `-` (stdin), a directory (all `*.pdf`, sorted) or a
-glob such as `"docs/**/*.pdf"`. `--output -` writes to stdout.
+glob such as `"docs/**/*.pdf"`.
+
+There are two families of command, and the difference decides whether a pattern
+matching several files is an error or a batch:
+
+- **Single-document** (`info`, `crop`, `form`, `pagenum`, `diff`, `organize`, …) read one
+  document. A directory or glob matching several files fails with `OPERATION_FAILED`
+  stating how many matched — it never quietly picks one.
+- **Batch** (`extract`, `convert`, `merge`) take several documents, as a comma list
+  (`--input a.pdf,b.pdf`) or as a directory/glob expanded to many. `extract` reports
+  per-document counts under `details.documents`.
+
+`--output -` writes to stdout. **Do not** combine it with `--json`/`--json-lines`:
+both would target stdout and the stream would be neither valid JSON nor clean text.
+The combination is rejected up front with `OPERATION_FAILED`.
 
 ## Commands
 
@@ -56,8 +75,19 @@ image filters, font types, metadata, warnings.
 pdf-cli convert --input photo.jpg --output out.pdf
 pdf-cli convert --input "a.png,b.png" --output album.pdf --page-size a4
 pdf-cli convert --input doc.md --output doc.pdf --font-size 12
+pdf-cli convert --input cn.txt --output cn.pdf --font C:\Windows\Fonts\simhei.ttf
 ```
 Inputs: jpg, jpeg, png, bmp, webp, tiff, gif, md, txt.
+
+**Text and fonts.** ASCII text renders with the built-in Helvetica, no font file needed.
+Non-ASCII text (Chinese, Japanese, …) requires `--font <truetype file>`: the font is
+subset and embedded, and the generated text stays extractable because a `/ToUnicode`
+map is written alongside it. Asking for non-ASCII without `--font` is a hard error
+naming the offending characters rather than a PDF full of blanks. A leading UTF-8 BOM
+is stripped automatically and reported as `details.bom_stripped`.
+
+Common CJK fonts on Windows: `simhei.ttf` (黑体), `Deng.ttf` (等线), `msyh.ttc` (雅黑),
+`simsun.ttc` (宋体).
 
 ### web-to-pdf — URL / HTML / SVG / image -> PDF (headless Edge)
 ```
@@ -131,8 +161,20 @@ cd F:\rust\ocr-rust
 .\ocr-rust.exe          # listens on http://localhost:18004, models must be alongside the exe
 ```
 Options: `--service` (default `http://localhost:18004`), `--width` render width (default 2000),
-`--pages`, `--pdfium-path`, `--output` (default: stdout).
+`--pages`, `--pdfium-path`, `--lang`, `--output-pdf`, `--output` (default: stdout).
 If the service is unreachable -> `OPERATION_FAILED` with a hint to start ocr-rust.
+
+`--lang <hint>` is forwarded to the service (e.g. `ch`, `eng`, `eng+ch`). Omit it to let
+the service apply its default. The effective value is reported in `details.lang`.
+
+`--output-pdf <path>` produces a **searchable PDF** instead of plain text: each page image
+kept as-is with the recognised text laid underneath as an invisible layer. The result is
+readable by `search` and `extract`, so a scanned document becomes greppable:
+```
+pdf-cli ocr --input scan.pdf --output-pdf searchable.pdf --service http://localhost:18004
+pdf-cli search --input searchable.pdf --pattern "invoice total" --json
+```
+Without `--output-pdf` the command behaves exactly as before and emits text only.
 
 ### extract — text from PDF
 ```
@@ -146,10 +188,31 @@ pdf-cli extract --input doc.pdf --pages 1-5 --json
 pdf-cli merge  --input a.pdf,b.pdf --output merged.pdf
 pdf-cli split  --input doc.pdf --output-dir ./pages
 pdf-cli split  --input doc.pdf --ranges 1-3,4-6 --output-dir ./parts
+pdf-cli split  --input doc.pdf --every 10 --output-dir ./chunks
+pdf-cli split  --input scan.pdf --odd-even --output-dir ./sides
 pdf-cli delete-pages --input doc.pdf --pages 2,5-7 --output clean.pdf
 pdf-cli rotate --input doc.pdf --angle 90 --output rotated.pdf
 ```
 `rotate` angle: 90, 180, or 270 (cumulative).
+
+`split` grouping strategies — pick **at most one**; giving two raises an error naming
+the ones you passed rather than silently choosing:
+
+| Flag | Result on a 7-page document |
+|---|---|
+| *(none)* | 7 files, one page each |
+| `--ranges "1-3,4-6,7"` | 3 files with 3, 3 and 1 pages |
+| `--every 3` | 3 files with 3, 3 and 1 pages (the short tail is kept) |
+| `--odd-even` | 2 files: pages 1,3,5,7 then pages 2,4,6 |
+
+`details.strategy` reports which grouping ran and `details.pages_per_file` gives each
+output's page count, so a caller can verify the split without reopening the files.
+
+`merge` carries over the document outline: each input contributes a top-level bookmark
+named after the file, with that file's own entries nested beneath it, and destinations
+remapped onto the merged page numbers. `details.outline_merged` / `details.outline_items`
+report whether an outline was written and how many entries it holds. Inputs without an
+outline produce no `/Outlines` key at all.
 
 ### watermark-add
 ```
