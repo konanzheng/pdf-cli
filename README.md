@@ -273,9 +273,9 @@ https://cnb.cool/free_llm/vibe-coding/pdf-cli/-/releases/download/skill/ocr-rust
 ```
 
 It listens on `http://127.0.0.1:18004` and exposes `POST /ocr`, `/ocr/raw` and
-`/ocr/base64`. The archive does not include the optional browser UI (`static/`), so
-`GET /` returns 404 — the HTTP endpoints work regardless. Installation, endpoints and
-worked examples: **SKILL.md → "OCR — get a local OCR service"**.
+`/ocr/base64`, plus a browser UI at `/` that compares the Rust server against an
+in-browser PaddleOCR.js on the same image. Installation, endpoints and worked
+examples: **SKILL.md → "OCR — get a local OCR service"**.
 
 ## AI agent integration
 

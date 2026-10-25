@@ -100,7 +100,6 @@ v0.3.0 交付后用一份**契约测试**（`tests/contract_test.ps1`，44 项�
 | `pdf-to-html` | PDF → HTML（保真度有限） | P3 |
 | `--recursive` | 目录输入时递归子目录 | P3 |
 
-
 ## 已明确不做
 
 | 功能 | 原因 |

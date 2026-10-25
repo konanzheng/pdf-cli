@@ -353,8 +353,9 @@ https://cnb.cool/free_llm/vibe-coding/pdf-cli/-/releases/download/skill/ocr-rust
 
 ### Install
 
-Download and extract; the archive contains a single `ocr-rust/` folder (~100 MB, 22 files).
-Nothing else to install — the ONNX runtime, DirectML provider and both model sets ship inside.
+Download and extract; the archive contains a single `ocr-rust/` folder (~90 MB, 48 entries).
+Nothing else to install — the ONNX runtime, DirectML provider, both model sets and the
+browser UI all ship inside.
 
 ```powershell
 Invoke-WebRequest -Uri https://cnb.cool/free_llm/vibe-coding/pdf-cli/-/releases/download/skill/ocr-rust.zip -OutFile ocr-rust.zip
@@ -375,6 +376,7 @@ models\PP-OCRv6_small_det_onnx\
 models\PP-OCRv6_small_rec_onnx\
 models\PP-OCRv6_tiny_det_onnx_infer\
 models\PP-OCRv6_tiny_rec_onnx_infer\
+static\
 ```
 
 ### Start the service
@@ -396,21 +398,21 @@ Stop it with `Ctrl+C` or `Stop-Process -Name ocr-rust`.
 
 ### Browser page
 
-The executable serves its bundled UI at **`http://127.0.0.1:18004/`** — open it to drop an
-image and read the recognised text. It also starts a browser window on launch.
+The executable serves a bundled comparison UI at **`http://127.0.0.1:18004/`** — open it in
+a browser, drop in an image, pick `small` or `tiny`, and it runs both the Rust server
+and an in-browser PaddleOCR.js side by side, showing latency, line count, mean
+confidence and the recognised text from each. It also opens a browser window on launch.
 
-**Caveat:** the UI is served only if a `static/` folder sits next to `ocr-rust.exe`. **The
-published zip does not include it** — that page is 10+ MB of WASM and was stripped from the
-release on purpose. With the zip alone, `GET /` returns **404** while every `/ocr*` endpoint
-still works, so scripted use is unaffected. If you want the page, either check whether your
-copy shipped a `static/` folder, or use the CLI endpoints below.
+The page needs the `static/` folder that ships inside the archive; **do not delete it**
+or move `ocr-rust.exe` away from it, or `GET /` returns 404 (every `/ocr*` endpoint keeps
+working regardless, so scripted use is unaffected).
 
 ### HTTP endpoints
 
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/health` | `{"status":"ok","version":"0.1.0"}` |
-| `GET` | `/` | UI (needs `static/`, see caveat) |
+| `GET` | `/` | bundled comparison UI |
 | `POST` | `/ocr` | `multipart/form-data`, first non-empty field wins |
 | `POST` | `/ocr/raw` | raw image bytes in the body |
 | `POST` | `/ocr/base64` | JSON `{"image":"<standard base64>"}` |
