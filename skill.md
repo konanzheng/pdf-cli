@@ -606,10 +606,13 @@ text *into* PDFs and does not read PDFs at all.
 - **No OCR.** pdf-cli never recognises text from images. It says so explicitly (empty text
   layer -> `OPERATION_FAILED`) rather than returning empty output. Pair it with the local
   OCR service documented above (`ocr-rust.zip`) when you hit a scan.
-- `pdf-to-image` requires `pdfium.dll` (not bundled). `search`, `form`, `diff` and
-  `to-markdown` use it when present and degrade gracefully without it — except `form`,
-  which needs it outright.
-- `web-to-pdf` requires Microsoft Edge.
+- `pdfium.dll` is needed by `pdf-to-image`, `to-markdown` and `form`; those three are
+  geometry-driven and have no fallback, so without it they fail with `PDFIUM_NOT_FOUND`.
+  `search` and `diff` need it only for geometry: `search` degrades and sets
+  `geometry_available: false`, `diff` works in `--mode text` (its default) but fails in
+  `--mode render`. Either pass `--pdfium-path`, or put `pdfium.dll` next to
+  `pdf-cli.exe` / on the system library path - there is no built-in lookup of a
+  bundled copy.
 - **`watermark-remove`** only removes **burned-in image** watermarks on raster/scanned pages;
   it does **not** remove vector or text-layer watermarks.
 - **Digital signature / PDF→Word / PDF→PPT / PDF→Excel**: not supported (see ROADMAP.md).
