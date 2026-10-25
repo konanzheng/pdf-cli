@@ -393,6 +393,53 @@ User: "这个PDF里有多少图片/字体/每页多大"
 pdf-cli doctor --input doc.pdf --json
 ```
 
+User: "这份手册里哪一页提到退款政策"
+```powershell
+pdf-cli search --input manual.pdf --pattern "退款|refund" --regex --json
+```
+
+User: "把这个PDF转成我能读的markdown"
+```powershell
+pdf-cli to-markdown --input report.pdf --mode doc --output report.md --pdfium-path <dir>\pdfium.dll --json
+```
+Use `--mode doc` for structure (headings, lists, tables); `--mode plain` gives one
+paragraph per text line with no heuristics. This command needs `pdfium.dll` even for
+`plain`.
+
+User: "上周那版和这版合同有什么不同"
+```powershell
+pdf-cli diff --input old.pdf --input2 new.pdf --json
+```
+Read `details.different`, **not** the exit code: `diff` exits 0 whenever both files
+are readable, so a caller that branches on `$LASTEXITCODE` silently treats every
+change as "no change".
+
+User: "把这个表单的姓名栏填上张三"
+```powershell
+pdf-cli form --input form.pdf --action list --json
+pdf-cli form --input form.pdf --action set --values "name=张三" --output filled.pdf --json
+```
+
+User: "把这一份合成长报告，顺便把书签也带上"
+```powershell
+pdf-cli merge --input "cover.pdf,ch1.pdf,ch2.pdf" --output report.pdf --json
+```
+
+User: "这个扫描件识别完还要能搜索"
+```powershell
+pdf-cli ocr --input scan.pdf --lang ch --output-pdf searchable.pdf --json
+```
+
+User: "每10页拆一份"
+```powershell
+pdf-cli split --input doc.pdf --every 10 --output-dir ./parts --json
+```
+
+User: "这个中文PDF转成文本但中文都变方框了"
+```powershell
+pdf-cli convert --input doc.pdf --output doc.txt --font "C:\Windows\Fonts\simhei.ttf" --json
+```
+
 ## Safety
 
 - `--dry-run` available for all mutating commands.
@@ -400,13 +447,27 @@ pdf-cli doctor --input doc.pdf --json
 
 ## Limitations
 
-- `pdf-to-image` and `ocr` require `pdfium.dll` (not bundled).
+- `pdf-to-image` and `ocr` require `pdfium.dll` (not bundled). `search`, `form`, `diff`
+  and `to-markdown` use it when present and degrade gracefully without it — except `form`,
+  which needs it outright.
 - `web-to-pdf` requires Microsoft Edge.
-- `ocr` additionally requires a running ocr-rust service (separate project).
+- `ocr` additionally requires a running ocr-rust service (separate project). `--lang` is
+  forwarded, but today's ocr-rust models ignore unknown query parameters; it is a hint
+  for compatible services, not a switch that changes this one.
 - **`watermark-remove`** only removes **burned-in image** watermarks on raster/scanned pages;
   it does **not** remove vector or text-layer watermarks.
-- **Font repair / digital signature / form fill / PDF→Word**: not supported (see ROADMAP.md).
+- **Digital signature / PDF→Word / PDF→PPT / PDF→Excel**: not supported (see ROADMAP.md).
+  Removing watermarks from a text layer is likewise not attempted.
 - **SVG → PDF** goes through headless Edge.
+- `merge` preserves bookmark titles, hierarchy, ordering and destinations, but normalises
+  every destination to `[page /Fit]` and drops `/F`, `/C` styling keys. Non-GoTo actions
+  (`/URI`, `/Launch`, `/GoToR`, JavaScript) keep their title but fall back to the file's
+  first page.
+- `ocr --output-pdf` places recognised text approximately: on the service's boxes when it
+  returns exactly one box per line, otherwise on fixed 16pt leading. It is built for
+  `extract`/`search` fidelity, not visual reproduction.
+- `convert --font` embeds one subset per document; text mixing scripts that no single
+  font covers must be split into separate conversions.
 
 ## Token-Efficient Patterns
 
