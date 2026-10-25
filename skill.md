@@ -12,16 +12,30 @@ Binary: `pdf-cli.exe`
   ```
 - **`--dry-run`** (global) — preview, no writes.
 - **`--quiet`** (global) — suppress stderr progress.
+- **`--password <pwd>`** (global) — unlocks encrypted input for *every* command.
+  Put it before or after the subcommand.
+- **`--json-lines`** (global) — emit one JSON object per line; use with
+  directory/glob inputs that process several files.
 - Exit `0` = success, `1` = error. With `--json`, errors are:
   ```json
   {"error": true, "code": "FILE_NOT_FOUND", "message": "...\n  -> hint"}
   ```
 
 Error codes: `FILE_NOT_FOUND`, `UNSUPPORTED_FORMAT`, `PARSE_FAILED`,
-`PASSWORD_REQUIRED`, `OPERATION_FAILED`, `INVALID_PAGE_RANGE`, `MISSING_ARG`,
-`BROWSER_NOT_FOUND`.
+`PASSWORD_REQUIRED`, `WRONG_PASSWORD`, `OPERATION_FAILED`, `INVALID_PAGE_RANGE`,
+`MISSING_ARG`, `BROWSER_NOT_FOUND`, `PDFIUM_NOT_FOUND`.
 
-Page-range grammar (used by `extract`, `delete-pages`, `rotate`, `split`, `pdf-to-image`, `ocr`, `watermark-remove`): `1-3,5,7-9`.
+Page-range grammar (used by `extract`, `delete-pages`, `rotate`, `split`,
+`pdf-to-image`, `ocr`, `watermark-remove`, `crop`, `search`): `1-3,5,7-9`.
+Open-ended forms `5-` (to the end) and `-3` (from the start) also work.
+Specs are 1-based and **strictly validated**: an out-of-range page raises
+`INVALID_PAGE_RANGE` naming the page and the document page count, rather than
+silently returning nothing.
+
+### Input / output conventions
+
+`--input` accepts a file, `-` (stdin), a directory (all `*.pdf`, sorted) or a
+glob such as `"docs/**/*.pdf"`. `--output -` writes to stdout.
 
 ## Commands
 
@@ -79,6 +93,12 @@ pdf-cli pagenum --input doc.pdf --output numbered.pdf --format "第 {n} 页 / �
 ```
 Positions: `bottom-center` (default), `bottom-left`, `bottom-right`, `top-center`, `top-left`, `top-right`.
 Format template supports `{n}` (current) and `{total}` (last).
+
+Non-ASCII `--format` values (e.g. `"第 {n} 页 / 共 {total} 页"`) automatically
+embed a **subsetted TrueType font** with a `/ToUnicode` map, so the digits are
+real text that `extract` and `search` can read back — not mojibake. A suitable
+system font is auto-detected; override with `--font <path.ttf>`. ASCII-only
+templates keep using the built-in Helvetica and embed nothing.
 
 ### meta — edit document metadata
 ```
@@ -168,9 +188,100 @@ Wrong password -> `PASSWORD_REQUIRED`.
 ### compress
 ```
 pdf-cli compress --input large.pdf --output small.pdf
-pdf-cli compress --input large.pdf --output small.pdf --level maximum
+pdf-cli compress --input large.pdf --output small.pdf --level extreme
 ```
-Levels: fast, balanced (default), maximum.
+Levels: `low` (prune objects + recompress only), `medium` (also drop document
+info and thumbnails), `extreme` (also drop metadata, annotations and outlines).
+Default: `medium`. JSON `details` reports `input_size`, `output_size`,
+`saved_percent` and which artefacts were dropped.
+
+### search — find text with geometry and context
+
+The "eyes" of the toolkit: returns where the text is, not just whether it exists.
+
+```
+pdf-cli search --input doc.pdf --pattern "indemnification" --json
+pdf-cli search --input doc.pdf --pattern "\d{4}-\d{2}-\d{2}" --regex --ignore-case
+pdf-cli search --input doc.pdf --pattern "total" --pages 1-3 --json
+```
+
+`details`: `input`, `pattern`, `regex`, `ignore_case`, `geometry_available`,
+`total_matches`, `matched_pages`, `pages_searched`,
+`hits[{page, text, bbox{x,y,width,height}, context}]`, `truncated`.
+`bbox` is `null` when pdfium is unavailable (fallback back end); check
+`geometry_available` before relying on coordinates. A scanned PDF with no text
+layer returns an error suggesting `ocr`.
+
+### to-markdown — PDF -> Markdown for an LLM
+
+Turns layout into structure: headings, paragraphs, lists and tables.
+
+```
+pdf-cli to-markdown --input report.pdf --output report.md
+pdf-cli to-markdown --input report.pdf --mode plain --output -
+```
+
+Modes: `doc` (default; infers headings/lists/tables from font size and column
+positions) and `plain` (reading order only). `details`: `input`, `output`, `mode`,
+`pages_converted`, `chars`, `headings`, `paragraphs`, `lists`, `tables`,
+`markdown`. Page boundaries are marked with `<!-- page N -->`.
+
+### diff — compare two revisions
+
+```
+pdf-cli diff --input v1.pdf --input2 v2.pdf --mode text --json
+pdf-cli diff --input v1.pdf --input2 v2.pdf --mode render --output diffdir
+```
+
+Modes: `text` (extracted-text comparison), `render` (per-pixel, needs pdfium;
+Δ>16 per channel) and `both`. Exits `0` even when the files differ — read
+`details.different`; this keeps "compare" usable inside automated pipelines.
+`details`: `different`, `pages_compared`, `pages_changed`, `pages_added`,
+`pages_removed`, `threshold`, `pages[{page,status,changed_ratio}]`, `masks`.
+
+### form — AcroForm fields
+
+```
+pdf-cli form --input w9.pdf --action list --json
+pdf-cli form --input w9.pdf --action set --values "name=Ada;date=2024-01-01" --output filled.pdf
+pdf-cli form --input w9.pdf --action flatten --output flat.pdf
+```
+
+`list` needs no `--output`; `set` and `flatten` do. A PDF without a form is a
+**success** with `has_form: false` (not an error), so agents can probe safely.
+`details`: `has_form`, `field_count`,
+`fields[{name, type, value, required, page, bbox}]`.
+
+### crop — trim margins or an explicit box
+
+```
+pdf-cli crop --input scan.pdf --box "0,0,400,600" --output cropped.pdf
+pdf-cli crop --input scan.pdf --auto --margin 6 --output cropped.pdf
+```
+
+`--box` is `left,bottom,right,top` in PDF points, with the origin at the
+bottom-left corner, and is clamped to the page MediaBox. `--auto` renders each
+page, treats near-white (>245) as empty, and crops to the content bounds
+(honouring `--margin`). Only `/CropBox` is set, so the original page content is
+never destroyed. `details`: `mode`, `margin`, `pages_affected`, `blank_pages`,
+`pages[{page, crop_box, original_size, cropped_size}]`.
+
+### organize — reorder / duplicate / drop / insert in one pass
+
+```
+pdf-cli organize --input doc.pdf --order "3,1-2" --output reordered.pdf
+pdf-cli organize --input doc.pdf --order "1,1,1" --output tripled.pdf
+pdf-cli organize --input doc.pdf --insert "2:appendix.pdf" --output combined.pdf
+pdf-cli organize --input doc.pdf --order "2,1" --insert "1:cover.pdf" --output final.pdf
+```
+
+`--order` uses the page-range grammar and **preserves order and duplicates**;
+omitted pages are dropped. `--insert "POSITION:FILE"` inserts another PDF's pages
+before `POSITION` (positions are 1-based; `total+1` appends). Split happens on
+the **first** `:` only, so Windows paths like `2:C:\docs\b.pdf` work. Multiple
+pairs are comma-separated and applied in descending position order.
+`details`: `order_applied`, `inserts_applied`, `pages_in`, `pages_out`,
+`pages[{out_index, source, source_page}]` — full provenance for every output page.
 
 ## Agent Workflow Examples
 

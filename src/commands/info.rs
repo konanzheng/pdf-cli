@@ -1,6 +1,6 @@
 use crate::error::PdfError;
+use crate::io;
 use crate::output::CommandResult;
-use lopdf::Document;
 
 pub fn run(input: &str) -> Result<CommandResult, PdfError> {
     if !std::path::Path::new(input).exists() {
@@ -9,9 +9,7 @@ pub fn run(input: &str) -> Result<CommandResult, PdfError> {
         });
     }
 
-    let doc = Document::load(input).map_err(|e| PdfError::ParseFailed {
-        reason: e.to_string(),
-    })?;
+    let doc = io::load_doc_path(input)?;
 
     let pages = doc.get_pages();
     let page_count = pages.len();

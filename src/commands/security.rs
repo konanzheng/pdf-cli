@@ -1,4 +1,5 @@
 use crate::error::PdfError;
+use crate::io;
 use crate::output::CommandResult;
 use lopdf::{Document, EncryptionState, EncryptionVersion, Object, Permissions, StringFormat};
 use std::path::Path;
@@ -50,9 +51,7 @@ pub fn encrypt(
         ));
     }
 
-    let mut doc = Document::load(input).map_err(|e| PdfError::ParseFailed {
-        reason: e.to_string(),
-    })?;
+    let mut doc = io::load_doc_path(input)?;
 
     ensure_file_id(&mut doc);
 
@@ -111,9 +110,7 @@ pub fn decrypt(
         ));
     }
 
-    let mut doc = Document::load(input).map_err(|e| PdfError::ParseFailed {
-        reason: e.to_string(),
-    })?;
+    let mut doc = io::load_doc_path(input)?;
 
     if doc.is_encrypted() {
         doc.decrypt(password)

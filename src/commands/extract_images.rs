@@ -1,6 +1,7 @@
 use crate::error::PdfError;
+use crate::io;
 use crate::output::CommandResult;
-use lopdf::{Document, Object, Stream};
+use lopdf::{Object, Stream};
 use std::path::Path;
 
 /// 从 Filter 推断扩展名（仅对可直接写出的压缩格式有意义）。
@@ -97,9 +98,7 @@ pub fn run(
         });
     }
 
-    let doc = Document::load(input).map_err(|e| PdfError::ParseFailed {
-        reason: e.to_string(),
-    })?;
+    let doc = io::load_doc_path(input)?;
 
     let pages = doc.get_pages();
 

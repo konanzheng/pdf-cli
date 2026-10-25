@@ -1,4 +1,5 @@
 use crate::error::PdfError;
+use crate::io;
 use crate::output::CommandResult;
 use lopdf::{Dictionary, Document, Object, StringFormat};
 use std::path::Path;
@@ -35,9 +36,7 @@ pub fn run(
         });
     }
 
-    let mut doc = Document::load(input).map_err(|e| PdfError::ParseFailed {
-        reason: e.to_string(),
-    })?;
+    let mut doc = io::load_doc_path(input)?;
 
     if dry_run {
         return Ok(CommandResult::ok(

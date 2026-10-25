@@ -155,8 +155,15 @@ $r = RJ @('extract-images','--input',$c1,'--output-dir',(Join-Path $work "xi"))
 Check "extract-images" ($r.details.image_count -ge 1) "count=$($r.details.image_count)"
 
 Write-Host "`n== extract text =="
+# The generated images have no text layer, so build a real text PDF for this check.
+$txtSrc = Join-Path $work "text.txt"
+Set-Content -Path $txtSrc -Value "Smoke test document`nSecond line for extraction." -Encoding UTF8
+$txtPdf = Join-Path $work "text.pdf"
+& $dbg convert --input $txtSrc --output $txtPdf --quiet 2>$null | Out-Null
+$r = RJ @('extract','--input',$txtPdf)
+Check "extract runs" ($r.success -and $r.details.char_count -gt 0) "chars=$($r.details.char_count)"
 $r = RJ @('extract','--input',$c1)
-Check "extract runs" ($r.success) "ok"
+Check "extract rejects image-only PDF" ($r.error -and $r.code -eq 'OPERATION_FAILED') "code=$($r.code)"
 
 Write-Host "`n== encrypt / decrypt =="
 $enc = Join-Path $work "enc.pdf"
@@ -181,6 +188,58 @@ $r = RJ @('rotate','--input',$c1,'--angle','45','--output',(Join-Path $work "bad
 Check "bad angle rejected" ($r.error) "code=$($r.code)"
 $r = RJ @('delete-pages','--input',$c1,'--pages','1','--output',(Join-Path $work "bad.pdf"))
 Check "delete-all rejected" ($r.error) "code=$($r.code)"
+
+Write-Host "`n== search / to-markdown / diff / form / crop / organize =="
+$PdfiumArg = if ($havePdfium) { @('--pdfium-path', $PdfiumPath) } else { @() }
+
+# search: use the text PDF, since the image fixtures carry no text layer.
+$r = RJ (@('search','--input',$txtPdf,'--pattern','Smoke') + $PdfiumArg)
+Check "search finds text" ($r.success -and $r.details.total_matches -ge 1) "matches=$($r.details.total_matches)"
+$r = RJ (@('search','--input',$txtPdf,'--pattern','zzz_no_such_text_zzz') + $PdfiumArg)
+Check "search no-match still succeeds" ($r.success -and $r.details.total_matches -eq 0) "matches=$($r.details.total_matches)"
+if ($havePdfium) {
+    $r = RJ (@('search','--input',$txtPdf,'--pattern','Smoke') + $PdfiumArg)
+    Check "search reports geometry" ($r.details.geometry_available -eq $true) "geo=$($r.details.geometry_available)"
+}
+
+# to-markdown: must produce a non-empty document.
+$mdOut = Join-Path $work "out.md"
+$r = RJ (@('to-markdown','--input',$txtPdf,'--output',$mdOut) + $PdfiumArg)
+Check "to-markdown writes file" ($r.success -and (Test-Path $mdOut) -and (Get-Item $mdOut).Length -gt 0) "len=$((Get-Item $mdOut -ErrorAction SilentlyContinue).Length)"
+
+# diff: identical files must report no difference.
+$r = RJ (@('diff','--input',$txtPdf,'--input2',$txtPdf,'--mode','text') + $PdfiumArg)
+Check "diff identical -> not different" ($r.success -and $r.details.different -eq $false) "different=$($r.details.different)"
+$otherSrc = Join-Path $work "other.txt"
+Set-Content -Path $otherSrc -Value "Completely unrelated content." -Encoding UTF8
+$otherPdf = Join-Path $work "other.pdf"
+& $dbg convert --input $otherSrc --output $otherPdf --quiet 2>$null | Out-Null
+$r = RJ (@('diff','--input',$txtPdf,'--input2',$otherPdf,'--mode','text') + $PdfiumArg)
+Check "diff altered -> different" ($r.success -and $r.details.different -eq $true) "different=$($r.details.different)"
+
+# form: a PDF with no form is a success with has_form=false, not an error.
+$r = RJ (@('form','--input',$txtPdf,'--action','list') + $PdfiumArg)
+Check "form on non-form is success" ($r.success -and $r.details.has_form -eq $false) "has_form=$($r.details.has_form)"
+
+# crop: explicit box, then confirm the page count survives.
+$cropOut = Join-Path $work "crop.pdf"
+$r = RJ @('crop','--input',$c1,'--box','0,0,200,200','--output',$cropOut)
+Check "crop with --box" ($r.success -and (Test-Path $cropOut)) "affected=$($r.details.pages_affected)"
+
+# organize: reverse a two-page document and confirm the order is reported.
+$orgOut = Join-Path $work "org.pdf"
+$r = RJ @('organize','--input',$c2,'--order','2,1','--output',$orgOut)
+Check "organize reorder" ($r.success -and $r.details.pages_out -eq 2) "pages_out=$($r.details.pages_out)"
+$r = RJ @('info','--input',$orgOut)
+Check "organize output is valid" ($r.success) "ok"
+
+Write-Host "`n== global password / stdin =="
+$r = RJ @('info','--input',$enc)
+Check "encrypted without --password -> PASSWORD_REQUIRED" ($r.error -and $r.code -eq 'PASSWORD_REQUIRED') "code=$($r.code)"
+$r = RJ @('--password','pw','info','--input',$enc)
+Check "global --password unlocks" ($r.success) "ok"
+$r = RJ @('--password','wrong','info','--input',$enc)
+Check "wrong password -> WRONG_PASSWORD" ($r.error -and $r.code -eq 'WRONG_PASSWORD') "code=$($r.code)"
 
 Write-Host ""
 $color = if ($script:fail -eq 0) { "Green" } else { "Red" }

@@ -1,4 +1,5 @@
 use crate::error::PdfError;
+use crate::io;
 use crate::output::CommandResult;
 use lopdf::{Dictionary, Document, Object};
 use std::collections::BTreeMap;
@@ -85,9 +86,7 @@ pub fn run(input: &str) -> Result<CommandResult, PdfError> {
             reason: e.to_string(),
         })?;
 
-    let doc = Document::load(input).map_err(|e| PdfError::ParseFailed {
-        reason: e.to_string(),
-    })?;
+    let doc = io::load_doc_path(input)?;
 
     let pages = doc.get_pages();
     let total_pages = pages.len();

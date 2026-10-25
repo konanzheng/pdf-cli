@@ -1,4 +1,5 @@
 use crate::error::PdfError;
+use crate::io;
 use crate::output::CommandResult;
 use image::codecs::jpeg::JpegEncoder;
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
@@ -74,9 +75,7 @@ pub fn add(
         ));
     }
 
-    let mut doc = Document::load(input).map_err(|e| PdfError::ParseFailed {
-        reason: e.to_string(),
-    })?;
+    let mut doc = io::load_doc_path(input)?;
 
     let pages = doc.get_pages();
     let page_count = pages.len();
@@ -371,9 +370,7 @@ pub fn remove(
         });
     }
 
-    let mut doc = Document::load(input).map_err(|e| PdfError::ParseFailed {
-        reason: e.to_string(),
-    })?;
+    let mut doc = io::load_doc_path(input)?;
     let all_pages = doc.get_pages();
     let total = all_pages.len() as u32;
 

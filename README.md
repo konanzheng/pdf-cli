@@ -7,6 +7,8 @@ flag-driven command with machine-readable JSON output, so an AI agent can drive 
 - **JSON-first** — `--json` returns a stable `{success, command, output, details}` envelope.
 - **Dry-run support** — `--dry-run` previews every mutating operation.
 - **Structured errors** — stable error codes with actionable hints.
+- **stdin / stdout** — pass `-` as input or output to pipe PDFs between tools.
+- **Global `--password`** — one flag unlocks encrypted inputs for every command.
 
 ## Features
 
@@ -32,6 +34,12 @@ flag-driven command with machine-readable JSON output, so an AI agent can drive 
 | `decrypt` | Remove password protection |
 | `info` | Quick metadata: pages, version, encryption, doc info |
 | `doctor` | Deep structural analysis: per-page size, images, fonts, warnings |
+| `search` | Find text (literal or regex) with page, bbox and surrounding context |
+| `to-markdown` | Convert a PDF into Markdown an LLM can read directly |
+| `diff` | Compare two PDFs by text or by rendered pixels |
+| `form` | List, fill or flatten AcroForm fields |
+| `crop` | Crop pages to an explicit box or auto-detect content bounds |
+| `organize` | Reorder / duplicate / drop / insert pages in one operation |
 
 Run `pdf-cli <command> --help` for per-command usage and examples.
 
@@ -77,6 +85,34 @@ Error codes: `FILE_NOT_FOUND`, `UNSUPPORTED_FORMAT`, `PARSE_FAILED`,
 `PASSWORD_REQUIRED`, `OPERATION_FAILED`, `INVALID_PAGE_RANGE`, `MISSING_ARG`,
 `BROWSER_NOT_FOUND`.
 
+### Shared input rules
+
+These apply to every command that takes `--input`:
+
+| Form | Meaning |
+|---|---|
+| `--input doc.pdf` | A single file |
+| `--input -` | Read the PDF from **stdin** |
+| `--input docs/` | Every `*.pdf` in the directory (sorted) |
+| `--input "docs/**/*.pdf"` | A glob, expanded recursively |
+
+`--output -` writes the result to **stdout** (for `extract`, `to-markdown`, `search`).
+
+`--password` is a **global** flag: place it before or after the subcommand and it
+applies to any encrypted input.
+
+### Page ranges
+
+Page specs are 1-based and strictly validated — an out-of-range or malformed spec
+returns `INVALID_PAGE_RANGE` instead of silently producing an empty result.
+
+| Spec | Meaning |
+|---|---|
+| `1-3` | Pages 1 through 3 |
+| `1-3,7` | Pages 1, 2, 3 and 7 |
+| `5-` | Page 5 to the end |
+| `-3` | Pages 1 through 3 |
+
 ### Examples
 
 ```powershell
@@ -115,7 +151,7 @@ pdf-cli rotate --input clean.pdf --angle 90 --output rotated.pdf
 # Watermark / compress / encrypt
 pdf-cli watermark-add --input doc.pdf --text "CONFIDENTIAL" --opacity 0.2 --output marked.pdf
 pdf-cli watermark-remove --input scan.pdf --output clean.pdf --threshold 212 --max-sat 12
-pdf-cli compress --input large.pdf --output small.pdf --level maximum
+pdf-cli compress --input large.pdf --output small.pdf --level extreme
 pdf-cli encrypt --input doc.pdf --user-password secret --output locked.pdf
 pdf-cli decrypt --input locked.pdf --password secret --output unlocked.pdf
 
@@ -124,6 +160,34 @@ pdf-cli extract --input doc.pdf --pages 1-3 --json
 ```
 
 Page-range grammar: `1-3,5,7-9`.
+
+# Find text with geometry and context
+pdf-cli search --input contract.pdf --pattern "indemnif" --json
+pdf-cli search --input contract.pdf --pattern "\d{4}-\d{2}-\d{2}" --regex --pages 1-3 --json
+
+# PDF -> Markdown an LLM can read
+pdf-cli to-markdown --input report.pdf --output report.md
+pdf-cli to-markdown --input report.pdf --mode plain --output -
+
+# Compare two revisions: text diff, or rendered-pixel diff with PNG masks
+pdf-cli diff --input v1.pdf --input2 v2.pdf --mode text --json
+pdf-cli diff --input v1.pdf --input2 v2.pdf --mode render --output diffdir --json
+
+# AcroForm fields: inspect, fill, flatten
+pdf-cli form --input w9.pdf --action list --json
+pdf-cli form --input w9.pdf --action set --values "name=Ada;date=2024-01-01" --output filled.pdf
+pdf-cli form --input filled.pdf --action flatten --output flat.pdf
+
+# Crop: explicit box, or auto-detect the content area
+pdf-cli crop --input scan.pdf --box "0,0,400,600" --output cropped.pdf
+pdf-cli crop --input scan.pdf --auto --margin 6 --output cropped.pdf
+
+# Reorder / duplicate / drop / insert pages in one pass
+pdf-cli organize --input doc.pdf --order "3,1-2" --output reordered.pdf
+pdf-cli organize --input doc.pdf --insert "2:appendix.pdf" --output combined.pdf
+
+# CJK page numbers (real font subsetting, not mojibake)
+pdf-cli pagenum --input doc.pdf --output doc.pdf --format "第 {n} 页 / 共 {total} 页"
 
 ### Watermark removal (best-effort)
 
@@ -151,6 +215,11 @@ removable image watermark is found, the command fails with an explanatory messag
 writing an unchanged file.
 
 ## Runtime dependencies
+
+`pagenum` with a non-ASCII `--format` embeds a subsetted TrueType font. It
+auto-detects a suitable system font (`simhei.ttf`, `Deng.ttf`, `msyh.ttc`,
+`simsun.ttc`); pass `--font <path>` to choose a specific one. ASCII-only
+templates use the built-in Helvetica and embed nothing.
 
 Most commands are pure Rust. External needs:
 

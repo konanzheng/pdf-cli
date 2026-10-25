@@ -12,7 +12,7 @@ const MARGIN: f32 = 18.0;
 fn num(obj: &Object) -> f32 {
     match obj {
         Object::Integer(v) => *v as f32,
-        Object::Real(v) => *v as f32,
+        Object::Real(v) => *v,
         _ => 0.0,
     }
 }
@@ -128,12 +128,10 @@ fn pdf_first_page_to_form(
         .clone();
 
     let contents = new_page_dict
-        .get(b"Contents")
-        .map(|o| o.clone())
+        .get(b"Contents").cloned()
         .unwrap_or(Object::Array(vec![]));
     let resources = new_page_dict
-        .get(b"Resources")
-        .map(|o| o.clone())
+        .get(b"Resources").cloned()
         .unwrap_or(Object::Dictionary(Dictionary::new()));
 
     let bytes = content_bytes(dst, &contents);

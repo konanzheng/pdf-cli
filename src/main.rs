@@ -1,5 +1,7 @@
 mod commands;
 mod error;
+mod font;
+mod io;
 mod output;
 
 use clap::{Parser, Subcommand};
@@ -26,6 +28,14 @@ struct Cli {
     /// Suppress progress messages on stderr
     #[arg(long, global = true, default_value_t = false)]
     quiet: bool,
+
+    /// Password for encrypted input PDFs (applies to every command)
+    #[arg(long, global = true)]
+    password: Option<String>,
+
+    /// Emit one JSON object per line (for batch / multi-file output)
+    #[arg(long, global = true, default_value_t = false)]
+    json_lines: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -149,8 +159,6 @@ enum Commands {
         #[arg(long)]
         input: String,
         #[arg(long)]
-        password: String,
-        #[arg(long)]
         output: String,
     },
 
@@ -160,7 +168,7 @@ enum Commands {
         input: String,
         #[arg(long)]
         output: String,
-        #[arg(long, default_value = "balanced")]
+        #[arg(long, default_value = "medium")]
         level: String,
     },
 
@@ -232,6 +240,9 @@ enum Commands {
         start: u32,
         #[arg(long, default_value_t = 10.0)]
         font_size: f32,
+        /// Path to a .ttf/.ttc font (required for CJK templates; auto-detected by default)
+        #[arg(long)]
+        font: Option<String>,
     },
 
     /// Edit document metadata
@@ -295,12 +306,219 @@ enum Commands {
         #[arg(long)]
         pdfium_path: Option<String>,
     },
+
+    /// Search text in a PDF: regex/literal, page + bbox + context, JSON-first
+    #[command(
+        long_about = "Search for text across a PDF and return machine-checkable hits.\n\n\
+            Each hit reports the page, bounding box (PDF points, origin top-left), the matched\n\
+            text, and surrounding context. Falls back to plain-text search when pdfium is\n\
+            unavailable; bbox/page geometry then comes back as null.\n\n\
+            Examples:\n  \
+            pdf-cli search --input doc.pdf --pattern \"invoice\" --json\n  \
+            pdf-cli search --input doc.pdf --pattern \"\\d{4}-\\d{2}-\\d{2}\" --regex --json\n  \
+            pdf-cli search --input doc.pdf --pattern \"第.章\" --regex --count-only --json"
+    )]
+    Search {
+        #[arg(long)]
+        input: String,
+        /// Text to find (literal, unless --regex)
+        #[arg(long)]
+        pattern: String,
+        /// Treat the pattern as a regular expression
+        #[arg(long, default_value_t = false)]
+        regex: bool,
+        /// Case-insensitive match
+        #[arg(long, default_value_t = false)]
+        ignore_case: bool,
+        /// Page range (default: all)
+        #[arg(long)]
+        pages: Option<String>,
+        /// Characters of context to include around each hit
+        #[arg(long, default_value_t = 40)]
+        context: usize,
+        /// Only report counts, not individual hits
+        #[arg(long, default_value_t = false)]
+        count_only: bool,
+        /// Stop after this many hits (0 = unlimited)
+        #[arg(long, default_value_t = 0)]
+        max_results: usize,
+        /// Explicit path to pdfium.dll
+        #[arg(long)]
+        pdfium_path: Option<String>,
+    },
+
+    /// Convert PDF to Markdown (headings, lists, tables, image anchors)
+    #[command(
+        name = "to-markdown",
+        long_about = "Convert a PDF into Markdown an LLM can read directly.\n\n\
+            Reconstructs headings from font size, joins lines into paragraphs, detects list\n\
+            markers and simple tables from text geometry, and emits `<!-- page N -->` markers.\n\n\
+            Modes:\n  \
+            doc    (default) structure-aware Markdown\n  \
+            plain  one paragraph per text line, no heuristics"
+    )]
+    ToMarkdown {
+        #[arg(long)]
+        input: String,
+        /// Output .md file (default: stdout)
+        #[arg(long)]
+        output: Option<String>,
+        /// Page range (default: all)
+        #[arg(long)]
+        pages: Option<String>,
+        /// doc | plain
+        #[arg(long, default_value = "doc")]
+        mode: String,
+        /// Explicit path to pdfium.dll
+        #[arg(long)]
+        pdfium_path: Option<String>,
+    },
+
+    /// Compare two PDFs by text and/or rendered pixels
+    #[command(
+        long_about = "Diff two PDFs and report what changed.\n\n\
+            text mode compares normalized extracted text per page (fast, exact).\n\
+            render mode compares rasterized pages and reports the changed-area ratio.\n\
+            both runs text first and falls back to render for pages whose text matches.\n\n\
+            Exit code is 0 even when files differ; read details.different / details.pages[].changed."
+    )]
+    Diff {
+        #[arg(long)]
+        input: String,
+        /// Second PDF to compare against
+        #[arg(long)]
+        input2: String,
+        /// text | render | both
+        #[arg(long, default_value = "text")]
+        mode: String,
+        /// Fraction of differing pixels (0-1) that still counts as "same" in render mode
+        #[arg(long, default_value_t = 0.001)]
+        threshold: f32,
+        /// Directory to write per-page diff masks (render mode)
+        #[arg(long)]
+        output: Option<String>,
+        /// Page range applied to both files (default: all)
+        #[arg(long)]
+        pages: Option<String>,
+        /// Render width in pixels for render mode
+        #[arg(long, default_value_t = 1000)]
+        width: u32,
+        /// Explicit path to pdfium.dll
+        #[arg(long)]
+        pdfium_path: Option<String>,
+    },
+
+    /// Inspect, fill and flatten AcroForm fields
+    #[command(
+        long_about = "Work with interactive PDF forms.\n\n\
+            Actions:\n  \
+            list      report every field with name, type, current value, required flag\n  \
+            set       fill fields from --values 'name=value;other=value'\n  \
+            flatten   bake field appearances into page content (no longer editable)\n\n\
+            Examples:\n  \
+            pdf-cli form --input f.pdf --action list --json\n  \
+            pdf-cli form --input f.pdf --action set --values \"name=Ada;agree=true\" --output out.pdf"
+    )]
+    Form {
+        #[arg(long)]
+        input: String,
+        /// list | set | flatten
+        #[arg(long, default_value = "list")]
+        action: String,
+        /// Field name filter (comma-separated) for list/set
+        #[arg(long)]
+        fields: Option<String>,
+        /// Values as name=value pairs separated by ';'
+        #[arg(long)]
+        values: Option<String>,
+        /// Output PDF (required for set/flatten)
+        #[arg(long)]
+        output: Option<String>,
+        /// Explicit path to pdfium.dll
+        #[arg(long)]
+        pdfium_path: Option<String>,
+    },
+
+    /// Crop pages to an explicit box or to the content bounding box
+    #[command(
+        long_about = "Trim page margins by setting the CropBox.\n\n\
+            --box takes 'left,bottom,right,top' in PDF points (origin bottom-left).\n\
+            --auto scans per-page ink extents and crops to content plus --margin.\n\n\
+            Examples:\n  \
+            pdf-cli crop --input in.pdf --output out.pdf --auto --margin 10\n  \
+            pdf-cli crop --input in.pdf --output out.pdf --box \"0,0,595,842\" --pages 1-3"
+    )]
+    Crop {
+        #[arg(long)]
+        input: String,
+        #[arg(long)]
+        output: String,
+        /// Explicit crop box: left,bottom,right,top in points
+        #[arg(long = "box")]
+        box_spec: Option<String>,
+        /// Crop to the detected content bounding box
+        #[arg(long, default_value_t = false)]
+        auto: bool,
+        /// Padding in points added around the detected content box (--auto)
+        #[arg(long, default_value_t = 0.0)]
+        margin: f32,
+        /// Page range (default: all)
+        #[arg(long)]
+        pages: Option<String>,
+        /// Path to pdfium.dll (required for --auto)
+        #[arg(long)]
+        pdfium_path: Option<String>,
+    },
+
+    /// Reorder, insert or duplicate pages in one pass
+    #[command(
+        long_about = "Reorder the pages of a PDF.\n\n\
+            --order takes 1-based page numbers, ranges, and repeats, e.g. \"3,1-2,3\".\n\
+            --insert takes 'position:file' pairs to splice another PDF in, e.g. \"2:b.pdf\".\n\n\
+            Examples:\n  \
+            pdf-cli organize --input in.pdf --output out.pdf --order \"3,1-2\"\n  \
+            pdf-cli organize --input a.pdf --output out.pdf --insert \"2:b.pdf\""
+    )]
+    Organize {
+        #[arg(long)]
+        input: String,
+        #[arg(long)]
+        output: String,
+        /// New page order, e.g. "3,1-2" (repeats allowed, omitting drops pages)
+        #[arg(long)]
+        order: Option<String>,
+        /// Insert other PDFs: "position:file[,position:file...]"
+        #[arg(long)]
+        insert: Option<String>,
+    },
 }
 
 fn main() {
+    // clap builds the whole command tree with a deep recursive walk. With 26
+    // subcommands that walk overflows the 1 MiB default main-thread stack in a
+    // debug build, aborting the process before any command code runs -- even for
+    // `--version`. Run the real entry point on a thread with a comfortable stack
+    // so the CLI behaves identically in every build profile.
+    const STACK_BYTES: usize = 16 * 1024 * 1024;
+    let handle = std::thread::Builder::new()
+        .stack_size(STACK_BYTES)
+        .name("pdf-cli".into())
+        .spawn(real_main)
+        .expect("failed to spawn the main worker thread");
+    // Propagate the worker's fate: a panic already printed its message.
+    if handle.join().is_err() {
+        std::process::exit(1);
+    }
+}
+
+fn real_main() {
     let cli = Cli::parse();
     let json = cli.json;
     let dry_run = cli.dry_run;
+    let _quiet = cli.quiet;
+    let _json_lines = cli.json_lines;
+    let password = cli.password.clone();
+    io::set_global_password(password.as_deref());
 
     let result: Result<CommandResult, error::PdfError> = match cli.command {
         Commands::Convert {
@@ -313,7 +531,7 @@ fn main() {
             input,
             output,
             pages,
-        } => commands::extract::run(&input, output.as_deref(), pages.as_deref()),
+        } => commands::extract::run(&input, output.as_deref(), pages.as_deref(), password.as_deref()),
         Commands::Merge { input, output } => commands::pages::merge(&input, &output, dry_run),
         Commands::Split {
             input,
@@ -369,16 +587,19 @@ fn main() {
             &output,
             dry_run,
         ),
-        Commands::Decrypt {
-            input,
-            password,
-            output,
-        } => commands::security::decrypt(&input, &password, &output, dry_run),
+        Commands::Decrypt { input, output } => match password.as_deref() {
+            Some(pwd) => commands::security::decrypt(&input, pwd, &output, dry_run),
+            None => Err(error::PdfError::MissingArg {
+                arg: "--password (the global flag) is required to decrypt".into(),
+                example: "pdf-cli --password secret decrypt --input enc.pdf --output dec.pdf"
+                    .into(),
+            }),
+        },
         Commands::Compress {
             input,
             output,
             level,
-        } => commands::optimize::compress(&input, &output, &level, dry_run),
+        } => commands::optimize::compress(&input, &output, &level, password.as_deref(), dry_run),
         Commands::Info { input } => commands::info::run(&input),
         Commands::Doctor { input } => commands::doctor::run(&input),
         Commands::WebToPdf {
@@ -411,8 +632,16 @@ fn main() {
             format,
             start,
             font_size,
+            font,
         } => commands::pagenum::run(
-            &input, &output, &position, &format, start, font_size, dry_run,
+            &input,
+            &output,
+            &position,
+            &format,
+            start,
+            font_size,
+            font.as_deref(),
+            dry_run,
         ),
         Commands::Meta {
             input,
@@ -453,6 +682,126 @@ fn main() {
             width,
             pages.as_deref(),
             pdfium_path.as_deref(),
+            dry_run,
+        ),
+        Commands::Search {
+            input,
+            pattern,
+            regex,
+            ignore_case,
+            pages,
+            context,
+            count_only,
+            max_results,
+            pdfium_path,
+        } => commands::search::run(
+            commands::search::SearchArgs {
+                input: &input,
+                pattern: &pattern,
+                regex,
+                ignore_case,
+                pages: pages.as_deref(),
+                context,
+                count_only,
+                max_results,
+                password: password.as_deref(),
+                pdfium_path: pdfium_path.as_deref(),
+            },
+            dry_run,
+        ),
+        Commands::ToMarkdown {
+            input,
+            output,
+            pages,
+            mode,
+            pdfium_path,
+        } => commands::to_markdown::run(
+            commands::to_markdown::ToMarkdownArgs {
+                input: &input,
+                output: output.as_deref(),
+                pages: pages.as_deref(),
+                mode: &mode,
+                password: password.as_deref(),
+                pdfium_path: pdfium_path.as_deref(),
+            },
+            dry_run,
+        ),
+        Commands::Diff {
+            input,
+            input2,
+            mode,
+            threshold,
+            output,
+            pages,
+            width,
+            pdfium_path,
+        } => commands::diffcmd::run(
+            commands::diffcmd::DiffArgs {
+                input: &input,
+                input2: &input2,
+                mode: &mode,
+                threshold,
+                output: output.as_deref(),
+                pages: pages.as_deref(),
+                width,
+                password: password.as_deref(),
+                pdfium_path: pdfium_path.as_deref(),
+            },
+            dry_run,
+        ),
+        Commands::Form {
+            input,
+            action,
+            fields,
+            values,
+            output,
+            pdfium_path,
+        } => commands::form::run(
+            commands::form::FormArgs {
+                input: &input,
+                action: &action,
+                fields: fields.as_deref(),
+                values: values.as_deref(),
+                output: output.as_deref(),
+                password: password.as_deref(),
+                pdfium_path: pdfium_path.as_deref(),
+            },
+            dry_run,
+        ),
+        Commands::Crop {
+            input,
+            output,
+            box_spec,
+            auto,
+            margin,
+            pages,
+            pdfium_path,
+        } => commands::crop::run(
+            commands::crop::CropArgs {
+                input: &input,
+                output: &output,
+                box_spec: box_spec.as_deref(),
+                auto,
+                margin,
+                pages: pages.as_deref(),
+                password: password.as_deref(),
+                pdfium_path: pdfium_path.as_deref(),
+            },
+            dry_run,
+        ),
+        Commands::Organize {
+            input,
+            output,
+            order,
+            insert,
+        } => commands::organize::run(
+            commands::organize::OrganizeArgs {
+                input: &input,
+                output: &output,
+                order: order.as_deref(),
+                insert: insert.as_deref(),
+                password: password.as_deref(),
+            },
             dry_run,
         ),
     };

@@ -1,6 +1,8 @@
 use crate::error::PdfError;
+use crate::font;
+use crate::io;
 use crate::output::CommandResult;
-use lopdf::{dictionary, Dictionary, Document, Object, Stream};
+use lopdf::{dictionary, Dictionary, Object, Stream};
 use std::path::Path;
 
 fn position_offset(pos: &str, w: f32, h: f32) -> (f32, f32) {
@@ -20,7 +22,7 @@ fn media_box(dict: &Dictionary) -> (f32, f32) {
         if mb.len() >= 4 {
             let n = |o: &Object| match o {
                 Object::Integer(v) => *v as f32,
-                Object::Real(v) => *v as f32,
+                Object::Real(v) => *v,
                 _ => 0.0,
             };
             let w = (n(&mb[2]) - n(&mb[0])).abs();
@@ -33,6 +35,12 @@ fn media_box(dict: &Dictionary) -> (f32, f32) {
     (595.28, 841.89)
 }
 
+/// True when every byte fits in ASCII, meaning the base-14 Helvetica font can
+/// render the text without any embedding. Pure-ASCII templates stay small.
+fn is_ascii(text: &str) -> bool {
+    text.is_ascii()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     input: &str,
@@ -41,17 +49,16 @@ pub fn run(
     format: &str,
     start: u32,
     font_size: f32,
+    font_path: Option<&str>,
     dry_run: bool,
 ) -> Result<CommandResult, PdfError> {
-    if !Path::new(input).exists() {
+    if !io::is_stdio(input) && !Path::new(input).exists() {
         return Err(PdfError::FileNotFound {
             path: input.to_string(),
         });
     }
 
-    let mut doc = Document::load(input).map_err(|e| PdfError::ParseFailed {
-        reason: e.to_string(),
-    })?;
+    let mut doc = io::load_doc(input, None)?;
 
     let pages = doc.get_pages();
     let total = pages.len();
@@ -65,22 +72,55 @@ pub fn run(
             )),
             serde_json::json!({
                 "dry_run": true,
+                "input": input,
+                "output": output,
                 "pages": total,
                 "position": position,
                 "format": format,
                 "start": start,
+                "embedded_font": !is_ascii(format),
             }),
         ));
     }
 
-    let font_id = doc.add_object(dictionary! {
-        "Type" => "Font",
-        "Subtype" => "Type1",
-        "BaseFont" => "Helvetica",
-        "Encoding" => "WinAnsiEncoding",
-    });
+    // The subset must cover *every* page-number string, not just one of them:
+    // `第 1 页` and `第 12 页` use different digit glyphs, and a subset built from
+    // a single sample would silently refuse to render the other pages.
+    let last_n = start + total as u32 - 1;
+    let all_text: String = (start..=last_n)
+        .map(|n| {
+            format
+                .replace("{n}", &n.to_string())
+                .replace("{total}", &last_n.to_string())
+        })
+        .collect();
+
+    // ASCII-only text uses the zero-cost base-14 font. Anything else is embedded
+    // as a subsetted TrueType font, which is what fixes CJK mojibake.
+    let embedded = if all_text.is_ascii() && font_path.is_none() {
+        None
+    } else {
+        Some(font::embed(
+            &mut doc,
+            &all_text,
+            font_path,
+            "PDFCLIEmbedded",
+        )?)
+    };
+
+    let font_id = match &embedded {
+        None => Some(doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Helvetica",
+            "Encoding" => "WinAnsiEncoding",
+        })),
+        Some(f) => Some(f.font_id),
+    };
+    let font_id = font_id.expect("font id always set");
 
     let mut numbered = 0u32;
+    let mut skipped: Vec<u32> = Vec::new();
     let mut page_nums: Vec<u32> = pages.keys().copied().collect();
     page_nums.sort();
 
@@ -102,18 +142,62 @@ pub fn run(
             .replace("{total}", &(start + total as u32 - 1).to_string());
 
         let (x, y) = position_offset(position, w, h);
-        let esc = text
-            .replace('\\', "\\\\")
-            .replace('(', "\\(")
-            .replace(')', "\\)");
+
+        // Build the text-showing operator appropriate to the chosen encoding.
+        let show = match &embedded {
+            Some(f) => {
+                if !f.covers(&text) {
+                    // The font lacks a glyph: report it rather than emit blanks.
+                    skipped.push(*page_num);
+                    continue;
+                }
+                format!("<{}> Tj", f.encode(&text))
+            }
+            None => {
+                let esc = text
+                    .replace('\\', "\\\\")
+                    .replace('(', "\\(")
+                    .replace(')', "\\)");
+                format!("({esc}) Tj")
+            }
+        };
+
+        // Choose a resource name that cannot collide with the page's own fonts.
+        // The page very often already uses /F1 for its body text; reusing that
+        // entry would make the original text render with our subsetted font --
+        // i.e. as mojibake. Read the existing names first, build the content
+        // stream, and only then take a mutable borrow of the page.
+        let existing_font_names: Vec<Vec<u8>> = doc
+            .get_object(page_id)
+            .ok()
+            .and_then(|o| o.as_dict().ok())
+            .and_then(|d| d.get(b"Resources").ok())
+            .and_then(|o| o.as_dict().ok())
+            .and_then(|r| r.get(b"Font").ok())
+            .and_then(|o| o.as_dict().ok())
+            .map(|f| f.iter().map(|(k, _)| k.clone()).collect())
+            .unwrap_or_default();
+
+        let mut n = 1u32;
+        let res_name = loop {
+            let candidate = format!("PDFCLINum{n}");
+            if !existing_font_names
+                .iter()
+                .any(|k| k.as_slice() == candidate.as_bytes())
+            {
+                break candidate;
+            }
+            n += 1;
+        };
+
         let content = format!(
-            "q\nBT\n/F1 {:.1} Tf\n0 g\n{:.1} {:.1} Td\n({}) Tj\nET\nQ\n",
-            font_size, x, y, esc
+            "q\nBT\n/{res_name} {:.1} Tf\n0 g\n{:.1} {:.1} Td\n{}\nET\nQ\n",
+            font_size, x, y, show
         );
         let content_id = doc.add_object(Stream::new(Dictionary::new(), content.into_bytes()));
 
         if let Ok(d) = doc.get_object_mut(page_id).and_then(|o| o.as_dict_mut()) {
-            // 合并 Resources
+            // Merge the page's existing resources rather than replacing them.
             let mut res = d
                 .get(b"Resources")
                 .ok()
@@ -126,11 +210,11 @@ pub fn run(
                 .and_then(|o| o.as_dict().ok())
                 .cloned()
                 .unwrap_or_default();
-            font_dict.set("F1", Object::Reference(font_id));
+            font_dict.set(res_name.as_str(), Object::Reference(font_id));
             res.set("Font", Object::Dictionary(font_dict));
             d.set("Resources", Object::Dictionary(res));
 
-            // 追加内容流
+            // Append the new content stream after the existing ones.
             match d.get(b"Contents").ok().cloned() {
                 Some(Object::Array(mut arr)) => {
                     arr.push(Object::Reference(content_id));
@@ -150,8 +234,18 @@ pub fn run(
         numbered += 1;
     }
 
+    if !skipped.is_empty() {
+        return Err(PdfError::Operation {
+            reason: format!(
+                "The selected font cannot render the page-number text on page(s) {:?}. \
+                 Pass --font <path to a .ttf/.ttc that contains these characters>.",
+                skipped
+            ),
+        });
+    }
+
     doc.save(output).map_err(|e| PdfError::Operation {
-        reason: e.to_string(),
+        reason: format!("Failed to write {output}: {e}"),
     })?;
 
     Ok(CommandResult::ok(
@@ -166,6 +260,8 @@ pub fn run(
             "position": position,
             "format": format,
             "start": start,
+            "font_embedded": embedded.is_some(),
+            "glyphs_subset": embedded.as_ref().map(|f| f.cids.len()),
         }),
     ))
 }

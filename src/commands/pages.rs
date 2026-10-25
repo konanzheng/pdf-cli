@@ -1,4 +1,5 @@
 use crate::error::PdfError;
+use crate::io;
 use crate::output::CommandResult;
 use lopdf::{Document, Object, ObjectId};
 use std::collections::BTreeMap;
@@ -39,7 +40,7 @@ fn parse_page_range(spec: &str, total: usize) -> Result<Vec<u32>, PdfError> {
     Ok(result)
 }
 
-fn copy_objects(dst: &mut Document, src: &Document) -> BTreeMap<ObjectId, ObjectId> {
+pub fn copy_objects(dst: &mut Document, src: &Document) -> BTreeMap<ObjectId, ObjectId> {
     let mut map: BTreeMap<ObjectId, ObjectId> = BTreeMap::new();
     for (&old_id, obj) in &src.objects {
         let new_id: ObjectId = dst.add_object(obj.clone());
@@ -53,7 +54,7 @@ fn copy_objects(dst: &mut Document, src: &Document) -> BTreeMap<ObjectId, Object
     map
 }
 
-fn remap_refs(obj: &mut Object, map: &BTreeMap<ObjectId, ObjectId>) {
+pub fn remap_refs(obj: &mut Object, map: &BTreeMap<ObjectId, ObjectId>) {
     match obj {
         Object::Reference(id) => {
             if let Some(new) = map.get(id) {
@@ -171,9 +172,7 @@ pub fn split(
     ranges: Option<&str>,
     dry_run: bool,
 ) -> Result<CommandResult, PdfError> {
-    let doc = Document::load(input).map_err(|e| PdfError::ParseFailed {
-        reason: e.to_string(),
-    })?;
+    let doc = io::load_doc_path(input)?;
     let total = doc.get_pages().len();
 
     let groups: Vec<Vec<u32>> = if let Some(r) = ranges {
@@ -239,9 +238,7 @@ pub fn delete_pages(
     output: &str,
     dry_run: bool,
 ) -> Result<CommandResult, PdfError> {
-    let mut doc = Document::load(input).map_err(|e| PdfError::ParseFailed {
-        reason: e.to_string(),
-    })?;
+    let mut doc = io::load_doc_path(input)?;
     let total = doc.get_pages().len();
     let to_delete = parse_page_range(pages_spec, total)?;
 
@@ -288,9 +285,7 @@ pub fn rotate(
         });
     }
 
-    let mut doc = Document::load(input).map_err(|e| PdfError::ParseFailed {
-        reason: e.to_string(),
-    })?;
+    let mut doc = io::load_doc_path(input)?;
     let total = doc.get_pages().len();
     let pages = if let Some(spec) = pages_spec {
         parse_page_range(spec, total)?
