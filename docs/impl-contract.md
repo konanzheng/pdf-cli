@@ -34,7 +34,23 @@ io::expand_inputs(input: &str) -> Result<Vec<PathBuf>, PdfError>     // 单文�
 io::bind_pdfium(pdfium_path: Option<&str>) -> Result<Pdfium, PdfError>
 io::with_extension(path: &Path, ext: &str) -> PathBuf
 io::stem_of(path: &Path) -> String
+// 批量输入（逗号列表 / 目录 / glob，任一 token 展开失败即报错，不静默跳过）
+io::expand_batch(input: &str) -> Result<Vec<PathBuf>, PdfError>
+// 单文档输入：只接受恰好命中一个文件，命中 0 个或多个都报 OPERATION_FAILED
+io::resolve_input_once(input: &str) -> Result<PathBuf, PdfError>
+// 把 PathBuf 转回可回显、可再次传给 --input 的字符串
+io::path_to_arg(path: &Path) -> String
 ```
+
+**单文档 vs 批量**——这是新增命令时必须先定的一件事：
+
+| 命令族 | 输入语义 | 用哪个 helper |
+| --- | --- | --- |
+| 单文档（`info`/`crop`/`form`/`pagenum`/`diff`/`organize`） | 必须恰好一个文件；目录或多种 glob 命中 >1 个时报错 | `resolve_input_once` |
+| 批量（`extract`/`convert`/`merge`） | 逗号列表、目录、glob 都展开成多份逐个处理 | `expand_batch` |
+
+**不要再自己写 `Path::exists()` 预检**：它会在输入展开之前就否掉目录和 glob。
+让 `expand_inputs` / `resolve_input_once` 去判断，错误信息才带得上「命中了几个文件」。
 
 `io::parse_page_range` 语义：`None` / 空串 = 全部页；支持 `1-3,5,7-9`、`3-`（到末页）、`-5`（从首页）；
 越界、倒序、杂散逗号、非数字**一律返回错误**（`INVALID_PAGE_RANGE`），绝不静默丢弃。
@@ -46,7 +62,7 @@ crate::commands::pages::copy_objects(dst: &mut Document, src: &Document) -> BTre
 crate::commands::pages::remap_refs(obj: &mut Object, map: &BTreeMap<ObjectId, ObjectId>)
 ```
 
-`copy_objects` 会�� `src` 的全部对象深拷贝进 `dst` 并返回旧 id → 新 id 的映射，是"从别的文档搬页"的标准做法。
+`copy_objects` 会把 `src` 的全部对象深拷贝进 `dst` 并返回旧 id → 新 id 的映射，是"从别的文档搬页"的标准做法。
 
 ## 3. 错误契约（`src/error.rs`）
 
@@ -78,9 +94,28 @@ CommandResult::ok(command: &str, output: Option<String>, details: serde_json::Va
 
 - `command`：命令的 kebab-case 名，例如 `"search"`、`"to-markdown"`、`"diff"`、`"form"`、`"crop"`、`"organize"`。
 - `output`：人类可读的一行摘要（非 `--json` 时打印它）。**不要**把整个结果塞这里。
-  文件输出类命令（crop/organize/form set）放输出路径；纯分析��命令（search/diff）放一句摘要。
+  文件输出类命令（crop/organize/form set）放输出路径；纯分析类命令（search/diff）放一句摘要。
 - `details`：**全部机器可读数据放这里**，用 `serde_json::json!` 构造。
   字段名用小写 snake_case；所有集合用数组；布尔用 `true/false`，不要字符串。
+
+### 已确立的 `details` 字段（新增命令请沿用这些名字，不要另造同义词）
+
+| 字段 | 出现于 | 含义 |
+| --- | --- | --- |
+| `resolved` | `info` | 输入是 glob/目录时，实际解析到的那个具体文件；单文件输入时等于 `input` |
+| `strategy` | `split` | `"ranges"` / `"every"` / `"odd-even"` / `"per-page"`，说明按哪种规则切的 |
+| `pages_per_file` | `split` | 每个输出文件包含的页数数组，与 `files` 等长 |
+| `outline_merged` | `merge` | 是否写入了 `/Outlines` |
+| `outline_items` | `merge` | 合并后书签条目总数（含嵌套） |
+| `lang` | `ocr` | 实际发给服务的语言提示；未传时为 `null` |
+| `output_pdf` | `ocr` | `--output-pdf` 生成的可搜索 PDF 路径 |
+| `searchable` / `pages_with_text` | `ocr` | 是否生成文字层、以及其中真正带文字的页数 |
+| `font_embedded` / `glyphs_subset` | `ocr`、`convert` | 是否内嵌字体、子集化的字形数 |
+| `bom_stripped` | `convert` | 是否剥掉了输入开头的一个 U+FEFF |
+
+**布尔字段的稳定性**：可选能力对应的键要**始终存在**（不支持时给 `null`/`false`），
+不要「有这个功能才多一个键」——否则调用方无法区分「没这个字段」和「值为假」。
+`ocr` 的 `lang`/`output_pdf`/`searchable`/`pages_with_text` 就按这条规则做。
 
 ### `--dry-run` 约定
 
