@@ -206,8 +206,8 @@ pub fn run(args: SearchArgs<'_>, dry_run: bool) -> Result<CommandResult, PdfErro
             reason: format!(
                 "No extractable text found on the selected pages of `{}`. \
                  The PDF is probably a scan without a text layer. \
-                 Try: pdf-cli ocr --input {} --output text.txt",
-                args.input, args.input
+                 pdf-cli does not run OCR: recognise the pages with a separate OCR tool first.",
+                args.input
             ),
         });
     }

@@ -910,8 +910,8 @@ pub fn run(args: ToMarkdownArgs<'_>, dry_run: bool) -> Result<CommandResult, Pdf
         return Err(PdfError::Operation {
             reason: format!(
                 "No text layer found in {}. The PDF is probably a scanned image. \
-                 Try: pdf-cli ocr --input {} --output text.txt",
-                args.input, args.input
+                 pdf-cli does not run OCR: recognise the pages with a separate OCR tool first.",
+                args.input
             ),
         });
     }

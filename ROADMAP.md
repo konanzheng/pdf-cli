@@ -13,7 +13,6 @@
 | `pagenum` | 加页码（位置/格式/起始页可调） |
 | `meta` | 编辑元数据（标题/作者/主题/关键词/创建者/生产者） |
 | `extract-images` | 提取内嵌原图（保留原始格式，不重渲染） |
-| `ocr` | 扫描件 OCR（调用 ocr-rust HTTP 服务，pdfium 渲染页面） |
 | `watermark-remove` | 去除**烧录进图像**的水印（扫描/栅格页，尽力版，见下） |
 
 ### 关于 `watermark-remove`（重要：范围与边界）
@@ -85,8 +84,6 @@ v0.3.0 交付后用一份**契约测试**（`tests/contract_test.ps1`，43 项�
 |---|---|
 | `split --every N` | 每 N 页一份，末段不足 N 页仍输出 |
 | `split --odd-even` | 双面扫描拆分（奇数页一份、偶数页一份） |
-| `ocr --lang` | 语言提示透传给 OCR 服务 |
-| `ocr --output-pdf` | 可搜索 PDF（图像 + 隐藏文字层），产出可被 `search`/`extract` 读回 |
 | `convert --font` | 正文转换嵌入真字体，中文不再乱码 |
 | `merge` 保书签 | 合并时迁移大纲，逐文件生成顶层书签 |
 
@@ -111,30 +108,35 @@ v0.3.0 交付后用一份**契约测试**（`tests/contract_test.ps1`，43 项�
 | 矢量/文本层水印去除 | 需识别内容流中的水印对象，**基本不可靠**；用户反馈 pdftk 也去不干净。**注**：烧录进图像的扫描件水印已由 `watermark-remove` 覆盖（尽力版） |
 | `sign`（数字签名） | 需证书链 + PDF 签名规范，工作量大，非核心场景 |
 | `pdf-to-word` | 保真度是行业难题（报告明确列为最大技术难点），投入产出比低 |
+| `ocr` | **已实现后又移除**：OCR 本质是 OCR 工具的职责，不是 PDF 工具的职责。见下 |
+
+## 已移除：`ocr`
+
+v0.2.0 曾实现 `ocr`（pdfium 渲染 → POST 给 ocr-rust 服务），v0.3.1 还给它加了
+`--lang` 与 `--output-pdf`。现已整体删除（含 `ureq` 依赖）。
+
+**判断依据**：它是 pdf-cli 里唯一一个把「本工具的输入交给另一个进程做真正工作」的命令，
+而这件真正的工作（文字识别）既不是 PDF 领域知识，也不由本仓库提供。代价是：
+
+- 引入仅此一处使用的 HTTP 客户端依赖
+- 命令的可用性取决于另一个项目的二进制是否构建、模型是否就位、端口是否通
+- 失败模式（服务没起、端口占用、模型缺失）全部由 pdf-cli 报出，看起来像是 pdf-cli 的问题
+
+**组合优于内置**：需要扫描件文字时，用 `pdf-to-image` 渲染，交给专用 OCR 工具，
+再把结果交给 `convert`（文本 → PDF），或直接读回 OCR 工具产出的可搜索 PDF。
+
+保留的契约是**不静默失败**：`extract` / `search` / `to-markdown` 遇到无文字层时
+返回 `OPERATION_FAILED` 并说明是扫描件，而不是给一个空字符串的成功结果——
+这样调用方知道该去换工具，而不是以为文件本来就是空的。
 
 ## 集成说明
-
-### OCR
-
-`ocr` 命令调用同机的 **ocr-rust HTTP 服务**（独立项目，PP-OCRv6 ONNX 模型）：
-
-    # 先启动 OCR 服务
-    cd F:\rust\ocr-rust
-    .\target\release\ocr-rust.exe     # 默认端口 18004
-
-    # 再用 pdf-cli 调用
-    pdf-cli ocr --input scan.pdf --service http://localhost:18004 --output text.txt
-
-pdf-cli 负责：pdfium 渲染页面 → PNG → POST 到 `/ocr/raw` → 汇总文本。
-不做模型内置，避免二进制膨胀（模型 ~10MB+）与依赖冲突。
 
 ### 运行时依赖汇总
 
 | 命令 | 依赖 |
 |---|---|
-| `pdf-to-image`, `ocr` | `pdfium.dll` |
+| `pdf-to-image` | `pdfium.dll` |
 | `web-to-pdf` | Microsoft Edge |
-| `ocr`（额外） | ocr-rust 服务运行中 |
 
 ## 战略方向（来自调研）
 

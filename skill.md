@@ -31,7 +31,7 @@ Error codes: `FILE_NOT_FOUND`, `UNSUPPORTED_FORMAT`, `PARSE_FAILED`,
 `MISSING_ARG`, `BROWSER_NOT_FOUND`, `PDFIUM_NOT_FOUND`.
 
 Page-range grammar (used by `extract`, `delete-pages`, `rotate`, `split`,
-`pdf-to-image`, `ocr`, `watermark-remove`, `crop`, `search`): `1-3,5,7-9`.
+`pdf-to-image`, `watermark-remove`, `crop`, `search`): `1-3,5,7-9`.
 Open-ended forms `5-` (to the end) and `-3` (from the start) also work.
 Specs are 1-based and **strictly validated**: an out-of-range page raises
 `INVALID_PAGE_RANGE` naming the page and the document page count, rather than
@@ -147,41 +147,26 @@ Pulls embedded XObject images **without re-rendering**:
 - FlateDecode / raw -> `.png` (decoded and re-encoded)
 Deduplicates images referenced by multiple pages. `--min-size` skips tiny images (larger side, px).
 
-### ocr — OCR scanned PDFs via external ocr-rust service
-```
-pdf-cli ocr --input scan.pdf --output text.txt
-pdf-cli ocr --input scan.pdf --pages 1-5 --service http://localhost:18004 --json
-pdf-cli ocr --input scan.pdf --pdfium-path C:\pdfium\pdfium.dll --service http://localhost:18004
-```
-**Requires**: (1) `pdfium.dll` to render pages, (2) a running **ocr-rust** HTTP service.
-
-Start the service first:
-```
-cd F:\rust\ocr-rust
-.\ocr-rust.exe          # listens on http://localhost:18004, models must be alongside the exe
-```
-Options: `--service` (default `http://localhost:18004`), `--width` render width (default 2000),
-`--pages`, `--pdfium-path`, `--lang`, `--output-pdf`, `--output` (default: stdout).
-If the service is unreachable -> `OPERATION_FAILED` with a hint to start ocr-rust.
-
-`--lang <hint>` is forwarded to the service (e.g. `ch`, `eng`, `eng+ch`). Omit it to let
-the service apply its default. The effective value is reported in `details.lang`.
-
-`--output-pdf <path>` produces a **searchable PDF** instead of plain text: each page image
-kept as-is with the recognised text laid underneath as an invisible layer. The result is
-readable by `search` and `extract`, so a scanned document becomes greppable:
-```
-pdf-cli ocr --input scan.pdf --output-pdf searchable.pdf --service http://localhost:18004
-pdf-cli search --input searchable.pdf --pattern "invoice total" --json
-```
-Without `--output-pdf` the command behaves exactly as before and emits text only.
-
 ### extract — text from PDF
 ```
 pdf-cli extract --input doc.pdf
 pdf-cli extract --input doc.pdf --output text.txt
 pdf-cli extract --input doc.pdf --pages 1-5 --json
 ```
+
+**Scanned PDFs have no text layer, and pdf-cli does not do OCR.** `extract`, `search`
+and `to-markdown` all fail loudly with `OPERATION_FAILED` ("No text layer found…")
+instead of returning an empty success — that error is your signal to reach for an OCR
+tool, not a bug. Compose the tools instead of expecting one to do everything:
+
+```
+pdf-cli pdf-to-image --input scan.pdf --output-dir ./pages --width 2400
+#  → run your OCR tool over ./pages/*.png
+#  → feed the resulting text back:
+pdf-cli convert --input ocr.txt --output searchable-notes.pdf
+```
+If the OCR tool emits a searchable PDF of its own, skip the last step — `search` and
+`extract` read that file directly.
 
 ### merge / split / delete-pages / rotate
 ```
@@ -272,8 +257,8 @@ pdf-cli search --input doc.pdf --pattern "total" --pages 1-3 --json
 `total_matches`, `matched_pages`, `pages_searched`,
 `hits[{page, text, bbox{x,y,width,height}, context}]`, `truncated`.
 `bbox` is `null` when pdfium is unavailable (fallback back end); check
-`geometry_available` before relying on coordinates. A scanned PDF with no text
-layer returns an error suggesting `ocr`.
+`geometry_available` before relying on coordinates. A scanned PDF with no text layer
+returns `OPERATION_FAILED` — pdf-cli has no OCR, so route it through a separate OCR tool.
 
 ### to-markdown — PDF -> Markdown for an LLM
 
@@ -365,7 +350,10 @@ pdf-cli extract-images --input doc.pdf --output-dir ./imgs --json
 
 User: "这是扫描件，帮我识别文字"
 ```powershell
-pdf-cli ocr --input scan.pdf --output text.txt --json
+# pdf-cli has no OCR. Render the pages, hand them to your OCR tool, then re-import.
+pdf-cli pdf-to-image --input scan.pdf --output-dir ./pages --width 2400 --json
+#  → OCR ./pages/*.png with a dedicated tool
+pdf-cli convert --input ocr.txt --output recognised.pdf --json
 ```
 
 User: "把这个网页保存成PDF"
@@ -426,9 +414,12 @@ pdf-cli merge --input "cover.pdf,ch1.pdf,ch2.pdf" --output report.pdf --json
 ```
 
 User: "这个扫描件识别完还要能搜索"
+Use an OCR tool that emits a searchable PDF (image + invisible text layer), then read it
+back with pdf-cli — `extract` and `search` work on it directly:
 ```powershell
-pdf-cli ocr --input scan.pdf --lang ch --output-pdf searchable.pdf --json
+pdf-cli search --input recognised.pdf --pattern "invoice total" --json
 ```
+pdf-cli cannot add that text layer itself.
 
 User: "每10页拆一份"
 ```powershell
@@ -447,13 +438,13 @@ pdf-cli convert --input doc.pdf --output doc.txt --font "C:\Windows\Fonts\simhei
 
 ## Limitations
 
-- `pdf-to-image` and `ocr` require `pdfium.dll` (not bundled). `search`, `form`, `diff`
-  and `to-markdown` use it when present and degrade gracefully without it — except `form`,
+- **No OCR.** pdf-cli never recognises text from images. It says so explicitly (empty text
+  layer → `OPERATION_FAILED`) rather than returning empty output, so compose it with a
+  dedicated OCR tool when you hit a scan.
+- `pdf-to-image` requires `pdfium.dll` (not bundled). `search`, `form`, `diff` and
+  `to-markdown` use it when present and degrade gracefully without it — except `form`,
   which needs it outright.
 - `web-to-pdf` requires Microsoft Edge.
-- `ocr` additionally requires a running ocr-rust service (separate project). `--lang` is
-  forwarded, but today's ocr-rust models ignore unknown query parameters; it is a hint
-  for compatible services, not a switch that changes this one.
 - **`watermark-remove`** only removes **burned-in image** watermarks on raster/scanned pages;
   it does **not** remove vector or text-layer watermarks.
 - **Digital signature / PDF→Word / PDF→PPT / PDF→Excel**: not supported (see ROADMAP.md).
@@ -463,9 +454,6 @@ pdf-cli convert --input doc.pdf --output doc.txt --font "C:\Windows\Fonts\simhei
   every destination to `[page /Fit]` and drops `/F`, `/C` styling keys. Non-GoTo actions
   (`/URI`, `/Launch`, `/GoToR`, JavaScript) keep their title but fall back to the file's
   first page.
-- `ocr --output-pdf` places recognised text approximately: on the service's boxes when it
-  returns exactly one box per line, otherwise on fixed 16pt leading. It is built for
-  `extract`/`search` fidelity, not visual reproduction.
 - `convert --font` embeds one subset per document; text mixing scripts that no single
   font covers must be split into separate conversions.
 

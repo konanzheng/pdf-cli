@@ -8,7 +8,6 @@ pub mod form;
 pub mod info;
 pub mod invoice;
 pub mod meta;
-pub mod ocr;
 pub mod optimize;
 pub mod organize;
 pub mod pagenum;

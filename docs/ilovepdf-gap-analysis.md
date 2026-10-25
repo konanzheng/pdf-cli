@@ -49,7 +49,7 @@
 | pdf→image | ✅ | pdfium 渲染 |
 | extract-images | ✅ | 原图直抽，比 iLovePDF 的 `extract` 模式更细（`--min-size`） |
 | compress | ⚠️ | 只有 `prune + recompress`，**`--level` 三档参数当前是装饰性的**（实测 extreme 与 low 输出字节一致） |
-| ocr | ⚠️ | 依赖外部 ocr-rust HTTP 服务，语言固定 |
+| ocr | ❌ | 不做。OCR 是独立工具的职责，pdf-cli 只保留无文字层时报错这一契约（曾实现，v0.3.2 移除） |
 | watermark add/remove | ✅ | 文本水印；另有 iLovePDF 完全没有的"烧录水印去除" |
 | pagenum | ⚠️ | 只有 Helvetica + WinAnsi，**中文页码实测输出乱码**（`第 1 页` → `ç¬¬ 1 é¡µ`） |
 | meta / info / doctor | ✅ | `doctor` 是差异化亮点 |
@@ -96,7 +96,7 @@ iLovePDF 是**人点鼠标**的产品，pdf-cli 是**Agent 调用**的工具。�
 | `redact` | ★★ | ★★ | ★★ | ★★★ | ★★ | P2 |
 | `repair` | ★★ | ★★★ | ★ | ★★★ | ★★ | P2 |
 | `pdf→pdfa` | ★★ | ★★★ | ★ | ★★★ | ★ | P2 |
-| OCR 增强（语言/可搜索PDF） | ★★★ | ★★★ | ★★★ | ★★ | ★★ | P1 |
+| OCR 增强（语言 / 可搜索 PDF） | ★★★ | ★★★ | ★★★ | ★★ | ★★ | 不做（交给独立 OCR 工具） |
 | `batch`/`stdin` | ★★★ | ★★★ | — | ★★★ | ★★★ | **P0（地基）** |
 | AI 摘要 / 翻译 | ★ | ★ | ★★ | ★ | ★ | 不做（交给上层 Agent） |
 | pdf→word/ppt/excel | ★ | ★ | ★★ | ★★★ | ★ | 不做（保真度无解） |
@@ -236,12 +236,16 @@ pdf-cli organize --input doc.pdf --insert 2:cover.pdf --output out.pdf
 - `merge` 迁移大纲：`lopdf` 有 `outlines.rs` / `toc.rs`，可读取每个源 PDF 的 `Outlines` 并按页偏移重写到合并文档
 - 这两条 ROADMAP 已列，只是没排期；`--max-size` 是新增想法
 
-### P1-5 OCR 增强
+### P1-5 OCR 增强 —— 已否决
 
-- `--lang chi_sim+eng` 透传给 ocr-rust（服务端支持则生效，不支持则明确报错而非静默）
-- `--output-pdf`：把 OCR 文本层**写回** PDF（用 `lopdf` 加不可见文本层 `Tr 3`），
-  产出"可搜索 PDF"——这正是 iLovePDF `ocr` 的核心交付物，当前 pdf-cli 只输出 txt
-- 与 `to-markdown` 组合：扫描件 → OCR → Markdown
+曾按本条实现 `ocr --lang` 与 `ocr --output-pdf`（可搜索 PDF），后整体删除。
+
+否决理由：文字识别既不是 PDF 领域知识，也不由本仓库提供。pdf-cli 在该命令里只做
+「渲染 + 转发 HTTP + 汇总」的胶水，代价却是一个只此一处的 HTTP 依赖、一项依赖外部
+进程是否就绪的能力，以及一批本该由 OCR 工具承担的失败模式。
+
+替代方案：`pdf-to-image` 渲染 → 专用 OCR 工具 → 文本交给 `convert`，或直接读回
+OCR 工具产出的可搜索 PDF。保留的契约是无文字层时报错而非返回空。
 
 ### P2（可选，成本/收益比一般）
 
@@ -301,7 +305,6 @@ pdf-cli organize --input doc.pdf --insert 2:cover.pdf --output out.pdf
 
 第 4 批（进阶）
   form --list|--set|--flatten
-  ocr --output-pdf（可搜索 PDF）
   redact --verify
   compress 真实档位 + --grayscale
 ```

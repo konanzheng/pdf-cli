@@ -298,42 +298,6 @@ enum Commands {
         min_size: u32,
     },
 
-    /// OCR scanned PDFs via an ocr-rust HTTP service
-    #[command(
-        long_about = "Run OCR on scanned PDF pages via an external ocr-rust HTTP service.\n\n\
-            Requires pdfium.dll (for rendering pages) and a running ocr-rust service.\n\n\
-            Start the service first:\n  \
-            cd F:\\rust\\ocr-rust; .\\target\\release\\ocr-rust.exe   # port 18004\n\n\
-            Examples:\n  \
-            pdf-cli ocr --input scan.pdf --output text.txt\n  \
-            pdf-cli ocr --input scan.pdf --pages 1-5 --service http://localhost:18004 --json"
-    )]
-    Ocr {
-        #[arg(long)]
-        input: String,
-        /// Output text file (default: stdout)
-        #[arg(long)]
-        output: Option<String>,
-        /// OCR service base URL
-        #[arg(long, default_value = "http://localhost:18004")]
-        service: String,
-        /// Render width in pixels before OCR
-        #[arg(long, default_value_t = 2000)]
-        width: u32,
-        /// Page range (default: all)
-        #[arg(long, allow_negative_numbers = true)]
-        pages: Option<String>,
-        /// Explicit path to pdfium.dll
-        #[arg(long)]
-        pdfium_path: Option<String>,
-        /// OCR language hint passed to the service, e.g. "ch" or "eng+ch"
-        #[arg(long)]
-        lang: Option<String>,
-        /// Write a searchable PDF (recognised text laid under the image)
-        #[arg(long)]
-        output_pdf: Option<String>,
-    },
-
     /// Search text in a PDF: regex/literal, page + bbox + context, JSON-first
     #[command(
         long_about = "Search for text across a PDF and return machine-checkable hits.\n\n\
@@ -769,26 +733,6 @@ fn real_main() {
             output_dir,
             min_size,
         } => commands::extract_images::run(&input, &output_dir, min_size, dry_run),
-        Commands::Ocr {
-            input,
-            output,
-            service,
-            width,
-            pages,
-            pdfium_path,
-            lang,
-            output_pdf,
-        } => commands::ocr::run(
-            &input,
-            output.as_deref(),
-            &service,
-            width,
-            pages.as_deref(),
-            pdfium_path.as_deref(),
-            lang.as_deref(),
-            output_pdf.as_deref(),
-            dry_run,
-        ),
         Commands::Search {
             input,
             pattern,

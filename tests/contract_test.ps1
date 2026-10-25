@@ -1,4 +1,4 @@
-﻿# pdf-cli contract test — verifies the machine-facing guarantees that every
+# pdf-cli contract test — verifies the machine-facing guarantees that every
 # command must uphold, independent of what any single command does.
 #
 # The smoke test answers "does this command work?"; this file answers "can an
@@ -265,11 +265,15 @@ Write-Host "`n== every command in --help is dispatchable =="
 $helpText = (Run @('--help')).stdout
 $commands = @('convert','extract','merge','split','delete-pages','rotate','watermark-add',
              'watermark-remove','encrypt','decrypt','compress','info','doctor','web-to-pdf',
-             'pdf-to-image','invoice','pagenum','meta','extract-images','ocr','search',
+             'pdf-to-image','invoice','pagenum','meta','extract-images','search',
              'to-markdown','diff','form','crop','organize')
 $missing = @()
 foreach ($c in $commands) { if ($helpText -notmatch [regex]::Escape($c)) { $missing += $c } }
 Check "all $($commands.Count) commands appear in --help" ($missing.Count -eq 0) "missing=$(if ($missing) { $missing -join ',' } else { 'none' })"
+
+# OCR was deliberately removed: it belongs to a separate OCR tool, not to pdf-cli.
+$r = Run @('ocr')
+Check "ocr is no longer a subcommand" ($r.code -eq 2 -and $r.stderr -match 'unrecognized subcommand') "code=$($r.code)"
 
 Write-Host ""
 $color = if ($script:fail -eq 0) { "Green" } else { "Red" }

@@ -21,7 +21,6 @@ flag-driven command with machine-readable JSON output, so an AI agent can drive 
 | `pagenum` | Add page numbers (position / format / start configurable) |
 | `meta` | Edit document metadata (title / author / subject / keywords / …) |
 | `extract-images` | Extract embedded images in their original format (no re-render) |
-| `ocr` | OCR scanned PDFs via an external ocr-rust HTTP service |
 | `extract` | Extract text from a PDF (optionally a page range) |
 | `merge` | Combine multiple PDFs into one |
 | `split` | Split a PDF by page or page range |
@@ -160,9 +159,6 @@ pdf-cli invoice --input "inv1.jpg,inv2.pdf,inv3.png" --output invoices.pdf
 pdf-cli pagenum --input doc.pdf --output numbered.pdf --format "第 {n} 页 / 共 {total} 页"
 pdf-cli meta --input doc.pdf --output out.pdf --title "报告" --author "张三"
 
-# OCR a scanned PDF (requires running ocr-rust service + pdfium)
-pdf-cli ocr --input scan.pdf --output text.txt --service http://localhost:18004
-
 # Page surgery
 pdf-cli merge  --input "a.pdf,b.pdf" --output merged.pdf
 pdf-cli split  --input merged.pdf --output-dir ./parts
@@ -248,25 +244,21 @@ Most commands are pure Rust. External needs:
 |---|---|
 | `web-to-pdf` | Microsoft Edge (auto-detected; `--edge-path`) |
 | `pdf-to-image` | `pdfium.dll` (`--pdfium-path`) |
-| `ocr` | `pdfium.dll` **and** a running ocr-rust service |
+| `to-markdown`, `search`, `form` | `pdfium.dll` for geometry; `form` always |
 
 `pdfium.dll`: download from <https://github.com/bblanchon/pdfium-binaries/releases>.
 
-## OCR integration
+## No OCR, by design
 
-`ocr` is a thin HTTP client — it does **not** bundle any OCR engine. It renders PDF pages
-(via pdfium) and POSTs them to a running **ocr-rust** service (separate project, PP-OCRv6 ONNX).
+pdf-cli does **not** ship OCR. OCR belongs to a dedicated tool, and composing the two is
+both simpler and better than an HTTP client buried in a PDF utility:
 
-```powershell
-# 1. start the OCR service (from the ocr-rust project)
-cd F:\rust\ocr-rust
-.\ocr-rust.exe        # http://localhost:18004
-
-# 2. run OCR from pdf-cli
-pdf-cli ocr --input scan.pdf --output text.txt --service http://localhost:18004 --json
+```
+pdf-cli pdf-to-image → OCR tool → text / searchable PDF
 ```
 
-If the service is unreachable, the command fails with a clear hint.
+`extract`, `search` and `to-markdown` detect an empty text layer and say so explicitly
+rather than returning an empty success, so an agent knows to reach for an OCR tool.
 
 ## AI agent integration
 
@@ -288,7 +280,6 @@ src/
     ├── pagenum.rs        # page numbers
     ├── meta.rs           # metadata editing
     ├── extract_images.rs # embedded image extraction
-    ├── ocr.rs            # OCR via external ocr-rust service
     ├── extract.rs        # text extraction
     ├── pages.rs          # merge / split / delete-pages / rotate
     ├── watermark.rs      # text watermark add + burned-in watermark remove
@@ -302,9 +293,9 @@ tests/
 
 ## Limitations
 
-- **OCR** requires an external ocr-rust service.
-- **Vector/text-layer watermark removal, font repair, digital signature, form fill,
-  PDF→Word**: not supported (see ROADMAP.md). `watermark-remove` handles only burned-in
+- **OCR**: not provided — use a dedicated OCR tool and compose (`pdf-to-image` → OCR → `convert`).
+- **Vector/text-layer watermark removal, font repair, digital signature, PDF→Word/PPT/Excel**:
+  not supported (see ROADMAP.md). `watermark-remove` handles only burned-in
   watermarks on raster/scanned pages, best-effort and threshold-based.
 - **SVG → PDF** goes through headless Edge.
 

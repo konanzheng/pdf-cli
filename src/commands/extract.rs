@@ -106,7 +106,8 @@ fn run_one(
         return Err(PdfError::Operation {
             reason: format!(
                 "No text layer found in {input}{}. The PDF is probably scanned images. \
-                 Try: pdf-cli ocr --input {input} --output text.txt",
+                 pdf-cli does not run OCR: recognise the pages with a separate OCR tool, \
+                 then feed its text output back in (e.g. `pdf-to-image` → OCR → `convert`).",
                 if selected.len() == 1 {
                     format!(" (page {})", selected[0])
                 } else {

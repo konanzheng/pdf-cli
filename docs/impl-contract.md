@@ -83,8 +83,11 @@ PdfError::PdfiumNotFound { reason }
 ```
 
 `Operation { reason }` 的 reason 文案要**可执行**：写清"哪里失败、期望什么、下一步怎么办"，
-例如 `"No text layer found; the PDF is scanned. Try: pdf-cli ocr --input <file>"`，
-而不是 `"failed"`。
+例如 `"No text layer found; the PDF is scanned. Render pages with pdf-to-image and run a
+separate OCR tool, then feed the text back"`，而不是 `"failed"`。
+
+**不要**在错误提示里叫用户去跑一个不存在的命令。pdf-cli 不做 OCR，所以提示必须指向
+外部工具或本仓库真实存在的命令（例如 `pdf-to-image`、`convert`）。
 
 ## 4. 输出契约（`src/output.rs`）
 
@@ -107,15 +110,15 @@ CommandResult::ok(command: &str, output: Option<String>, details: serde_json::Va
 | `pages_per_file` | `split` | 每个输出文件包含的页数数组，与 `files` 等长 |
 | `outline_merged` | `merge` | 是否写入了 `/Outlines` |
 | `outline_items` | `merge` | 合并后书签条目总数（含嵌套） |
-| `lang` | `ocr` | 实际发给服务的语言提示；未传时为 `null` |
-| `output_pdf` | `ocr` | `--output-pdf` 生成的可搜索 PDF 路径 |
-| `searchable` / `pages_with_text` | `ocr` | 是否生成文字层、以及其中真正带文字的页数 |
-| `font_embedded` / `glyphs_subset` | `ocr`、`convert` | 是否内嵌字体、子集化的字形数 |
+| `font_embedded` / `glyphs_subset` | `convert` | 是否内嵌字体、子集化的字形数 |
 | `bom_stripped` | `convert` | 是否剥掉了输入开头的一个 U+FEFF |
 
 **布尔字段的稳定性**：可选能力对应的键要**始终存在**（不支持时给 `null`/`false`），
 不要「有这个功能才多一个键」——否则调用方无法区分「没这个字段」和「值为假」。
-`ocr` 的 `lang`/`output_pdf`/`searchable`/`pages_with_text` 就按这条规则做。
+
+**已删除的字段**：v0.3.1 曾有 `ocr` 命令及其 `lang` / `output_pdf` / `searchable` /
+`pages_with_text` 字段，该命令已整体移除。不要因为旧文档提到就把它加回来——OCR 属于
+独立的 OCR 工具，见 ROADMAP.md「已移除：`ocr`」。
 
 ### `--dry-run` 约定
 
