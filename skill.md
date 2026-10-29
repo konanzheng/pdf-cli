@@ -130,6 +130,64 @@ real text that `extract` and `search` can read back — not mojibake. A suitable
 system font is auto-detected; override with `--font <path.ttf>`. ASCII-only
 templates keep using the built-in Helvetica and embed nothing.
 
+### redact — replace text in place (bulk edits)
+```
+pdf-cli redact --input in.pdf --output out.pdf --find "Acme Corp" --replace "Beta Ltd" --dry-run --json
+pdf-cli redact --input in.pdf --output out.pdf --find "2024-0042" --replace "2025-0099"
+pdf-cli redact --input in.pdf --output out.pdf --find "草稿" --replace "定稿" --font C:\Windows\Fonts\msyh.ttc
+pdf-cli redact --input in.pdf --output out.pdf --find "Draft" --replace "Final" --pages 2-20
+```
+Built for the tedious case: the same wording repeated across many pages, where each
+copy differs by a name, a date or an amount. One pass fixes every occurrence.
+
+How it works: `search` measures the rectangle of each match, that rectangle is filled
+with an opaque box, then the replacement is drawn on top at the same origin and font
+size. Non-ASCII replacements embed a subsetted font with `/ToUnicode`, so the new text
+is real text that `extract` and `search` read back.
+
+> **The original text is still in the content stream.** The cover hides it visually,
+> but `extract`, `search` and copy-paste still reach it, and so does any tool that
+> parses the stream. This is a *presentation* fix, not a security control: never rely
+> on it to redact secrets for publication. For genuinely confidential material, flatten
+> or rasterise the page instead. `details.original_text_retained` is always `true`.
+
+Options: `--find`, `--replace` (both required), `--pages`, `--cover-color "1 1 1"`
+(three 0-1 components), `--padding` (points, default 0.5), `--font`, `--pdfium-path`.
+
+**Requires pdfium** — the rectangle must be measured, and there is no guessing
+fallback: without it the command fails with `OPERATION_FAILED` and says so. Pages
+carrying `/Rotate` are **skipped** and listed in `details.skipped_rotated_pages`,
+because their text rects do not map onto the content stream by a vertical flip
+alone. If every match sat on a rotated page the command fails rather than writing
+a file that looks changed but is not.
+
+No match is a success with `written: false`, not an error — script against it.
+
+### overlay — draw text or cover boxes at exact coordinates
+```
+pdf-cli overlay --input in.pdf --output out.pdf --text "1:x=72,y=700,text=Hello,size=12"
+pdf-cli overlay --input in.pdf --output out.pdf --text "*:x=72,y=760,text=DRAFT"
+pdf-cli overlay --input in.pdf --output out.pdf --text "2-4:x=100,y=600,w=120,h=14,cover=1/1/1,text=Acme"
+```
+The manual counterpart to `redact`. Use it for fixed-layout templates, or for scanned
+pages that have no text layer for `redact` to search.
+
+`--text` takes `PAGE:key=value,...` items separated by `;`. `PAGE` is `N`, `N-M` or `*`
+(all pages). Keys:
+
+| key | meaning |
+|---|---|
+| `x`, `y` | position in PDF points, origin **bottom-left** (required) |
+| `text` | string to draw |
+| `size` | font size in points (default 11) |
+| `w`, `h` | cover-box size; both must be given to draw a cover |
+| `cover` | fill as `r/g/b` or `r g b`, each 0-1 (default white) |
+
+**Coordinates are bottom-left**, matching `crop --box` and the PDF spec — unlike
+`search`'s `bbox`, which is top-left. Use `/` or spaces for the colour, not commas:
+commas already separate the `key=value` pairs. Overlay works **without pdfium**; a
+page carrying `/Rotate` is a hard error, since the coordinates would land wrong.
+
 ### meta — edit document metadata
 ```
 pdf-cli meta --input doc.pdf --output out.pdf --title "Report" --author "Alice"
@@ -613,6 +671,13 @@ text *into* PDFs and does not read PDFs at all.
   `--mode render`. Either pass `--pdfium-path`, or put `pdfium.dll` next to
   `pdf-cli.exe` / on the system library path - there is no built-in lookup of a
   bundled copy.
+- **`redact` cannot truly delete text.** It covers the matched rectangle and draws the
+  replacement on top, so the page *looks* right and the new text is extractable — but the
+  original string is still in the content stream and `extract`/`search`/copy-paste will
+  still find it. Treat it as a bulk-editing convenience, never as a way to remove
+  confidential data. Rasterise the pages if removal must be irreversible.
+- **`redact` requires pdfium** (it measures the rectangle) and skips pages carrying
+  `/Rotate`, reporting them in `details.skipped_rotated_pages`.
 - **`watermark-remove`** only removes **burned-in image** watermarks on raster/scanned pages;
   it does **not** remove vector or text-layer watermarks.
 - **Digital signature / PDF→Word / PDF→PPT / PDF→Excel**: not supported (see ROADMAP.md).

@@ -1,4 +1,4 @@
-﻿# pdf-cli smoke test — self-contained end-to-end check of every command.
+# pdf-cli smoke test — self-contained end-to-end check of every command.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File tests\smoke_test.ps1
@@ -301,6 +301,37 @@ $r = RJ @('organize','--input',$c2,'--order','2,1','--output',$orgOut)
 Check "organize reorder" ($r.success -and $r.details.pages_out -eq 2) "pages_out=$($r.details.pages_out)"
 $r = RJ @('info','--input',$orgOut)
 Check "organize output is valid" ($r.success) "ok"
+
+# ---------- redact / overlay ----------
+Write-Host "`n== redact / overlay =="
+# overlay works without pdfium: it takes coordinates, it does not measure them.
+$ovOut = Join-Path $work "overlay.pdf"
+$r = RJ @('overlay','--input',$txtPdf,'--output',$ovOut,'--text','1:x=72,y=700,text=OVERLAYMARK,size=12')
+Check "overlay draws text" ($r.success -and (Test-Path $ovOut) -and $r.details.items -eq 1) "items=$($r.details.items)"
+$r = RJ @('extract','--input',$ovOut)
+Check "overlay text is extractable" ($r.output -match 'OVERLAYMARK') "has_mark=$($r.output -match 'OVERLAYMARK')"
+$r = RJ @('overlay','--input',$txtPdf,'--output',(Join-Path $work "ov2.pdf"),'--text','1:x=72,y=600,text=BOX,w=80,h=20,cover=1/1/1')
+Check "overlay cover box + text" ($r.success) "ok"
+$r = RJ @('overlay','--input',$txtPdf,'--output',(Join-Path $work "ov3.pdf"),'--text','1:x=72,y=600,nope=1')
+Check "overlay rejects unknown key" ($r.error -and $r.code -eq 'OPERATION_FAILED') "code=$($r.code)"
+$r = RJ @('overlay','--input',$txtPdf,'--output',(Join-Path $work "ov4.pdf"),'--text','1:y=600,text=X')
+Check "overlay requires x and y" ($r.error -and $r.code -eq 'OPERATION_FAILED') "code=$($r.code)"
+
+# redact needs a measurable rectangle, so it is pdfium-only.
+if ($havePdfium) {
+    $rdOut = Join-Path $work "redact.pdf"
+    $r = RJ (@('redact','--input',$txtPdf,'--output',$rdOut,'--find','Smoke','--replace','ReplacedMk') + $PdfiumArg)
+    Check "redact replaces text" ($r.success -and (Test-Path $rdOut) -and $r.details.occurrences -ge 1) "occ=$($r.details.occurrences)"
+    $r = RJ @('extract','--input',$rdOut)
+    Check "redact replacement is extractable" ($r.output -match 'ReplacedMk') "has_mk=$($r.output -match 'ReplacedMk')"
+    $r = RJ (@('redact','--input',$txtPdf,'--output',(Join-Path $work "rd2.pdf"),'--find','Smoke','--replace','X') + $PdfiumArg + @('--dry-run'))
+    Check "redact --dry-run writes nothing" ($r.success -and $r.details.dry_run -eq $true -and -not (Test-Path (Join-Path $work "rd2.pdf"))) "dry=$($r.details.dry_run)"
+    $r = RJ (@('redact','--input',$txtPdf,'--output',(Join-Path $work "rd3.pdf"),'--find','zz_no_such_zz','--replace','X') + $PdfiumArg)
+    Check "redact no-match writes nothing" ($r.success -and $r.details.written -eq $false) "written=$($r.details.written)"
+} else {
+    $r = RJ @('redact','--input',$txtPdf,'--output',(Join-Path $work "rd0.pdf"),'--find','Smoke','--replace','X')
+    Check "redact without pdfium fails clearly" ($r.error -and $r.code -eq 'OPERATION_FAILED') "code=$($r.code)"
+}
 
 Write-Host "`n== global password / stdin =="
 $r = RJ @('info','--input',$enc)

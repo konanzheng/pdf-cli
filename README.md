@@ -19,6 +19,8 @@ flag-driven command with machine-readable JSON output, so an AI agent can drive 
 | `pdf-to-image` | PDF pages → PNG / JPEG (via pdfium) |
 | `invoice` | Tile images/PDFs onto A4, 2 per page (top/bottom) |
 | `pagenum` | Add page numbers (position / format / start configurable) |
+| `redact` | Find text and replace it in place — cover the rectangle, draw the new text (pdfium) |
+| `overlay` | Draw text or cover boxes at exact page coordinates |
 | `meta` | Edit document metadata (title / author / subject / keywords / …) |
 | `extract-images` | Extract embedded images in their original format (no re-render) |
 | `extract` | Extract text from a PDF (optionally a page range) |
@@ -245,12 +247,46 @@ Most commands are pure Rust. External needs:
 | `web-to-pdf` | Microsoft Edge (auto-detected; `--edge-path`) |
 | `pdf-to-image` | `pdfium.dll` (`--pdfium-path`) |
 | `to-markdown`, `form` | `pdfium.dll` — required (both are geometry-driven, no fallback) |
+| `redact` | `pdfium.dll` — required (it measures where the matched text sits) |
 | `search`, `diff --mode render` | `pdfium.dll` for geometry; degrade without it (`search` sets `geometry_available: false`) |
 
 `pdfium.dll`: download from <https://github.com/bblanchon/pdfium-binaries/releases>.
 
 There is **no built-in lookup** of `testdata\pdfium\bin`: pass `--pdfium-path`, or put
 `pdfium.dll` next to `pdf-cli.exe` / on the system library path.
+
+## Editing text on a page: `redact` and `overlay`
+
+Two commands patch text without a full editor, aimed at the tedious case where the
+same wording repeats across many pages and each copy needs one word changed:
+
+```
+pdf-cli redact  --input in.pdf --output out.pdf --find "Acme Corp" --replace "Beta Ltd"
+pdf-cli overlay --input in.pdf --output out.pdf --text "*:x=72,y=760,text=DRAFT"
+```
+
+`redact` finds the text for you (via `search`'s measured bounding boxes); `overlay`
+takes coordinates you supply, which also makes it the only option for scanned pages
+that have no text layer. Both cover the old area with an opaque box and draw the new
+content on top.
+
+> **Neither one deletes the original text.** The cover hides it from view, but the
+> glyphs stay in the content stream: `extract`, `search` and copy-paste still return
+> them, and so does any tool that parses the PDF. This is a presentation fix, not a
+> security control — do **not** use it to remove passwords, ID numbers or other
+> secrets from a document you will publish. Rasterise the pages if the removal must
+> be irreversible.
+
+Notes:
+
+- `redact` **requires pdfium**, since the rectangle has to be measured. It skips
+  pages carrying `/Rotate` (reported in `details.skipped_rotated_pages`) because a
+  vertical flip alone does not map their text rects onto the content stream.
+- `overlay` coordinates use the **bottom-left** origin, like `crop --box` and the PDF
+  spec, while `search`'s `bbox` is **top-left**. Cover colours in the `--text` spec are
+  written `r/g/b` (commas already separate the `key=value` pairs).
+- Non-ASCII replacements embed a subsetted font with `/ToUnicode`, so the new text is
+  extractable rather than mojibake.
 
 ## No OCR, by design
 
@@ -297,6 +333,8 @@ src/
 │   ├── pdf2img.rs        # PDF -> PNG / JPEG (pdfium)
 │   ├── invoice.rs        # A4 2-up tiling
 │   ├── pagenum.rs        # page numbers
+│   ├── redact.rs         # find-and-replace text via measured bboxes
+│   ├── overlay.rs        # text / cover boxes at explicit coordinates
 │   ├── meta.rs           # metadata editing
 │   ├── extract_images.rs # embedded image extraction
 │   ├── extract.rs        # text extraction

@@ -266,7 +266,7 @@ $helpText = (Run @('--help')).stdout
 $commands = @('convert','extract','merge','split','delete-pages','rotate','watermark-add',
              'watermark-remove','encrypt','decrypt','compress','info','doctor','web-to-pdf',
              'pdf-to-image','invoice','pagenum','meta','extract-images','search',
-             'to-markdown','diff','form','crop','organize')
+             'to-markdown','diff','form','crop','organize','redact','overlay')
 $missing = @()
 foreach ($c in $commands) { if ($helpText -notmatch [regex]::Escape($c)) { $missing += $c } }
 Check "all $($commands.Count) commands appear in --help" ($missing.Count -eq 0) "missing=$(if ($missing) { $missing -join ',' } else { 'none' })"

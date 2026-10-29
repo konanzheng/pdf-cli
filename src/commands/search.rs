@@ -68,11 +68,11 @@ struct Hit {
 }
 
 /// A rectangle in PDF points, origin top-left.
-struct Bbox {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
+pub struct Bbox {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 impl Bbox {
@@ -84,6 +84,97 @@ impl Bbox {
             "height": self.height,
         })
     }
+}
+
+/// One located occurrence of a pattern, for callers that need coordinates
+/// rather than a report (e.g. `redact`).
+pub struct Located {
+    pub page: u32,
+    pub text: String,
+    pub bbox: Bbox,
+}
+
+/// Locate every occurrence of `pattern` on the selected pages, returning the
+/// coordinates of each hit in the CLI's top-left-origin convention.
+///
+/// This is the geometry half of `search`, exposed so `redact` can reuse the
+/// same pdfium measurement and coordinate flip instead of duplicating it.
+/// pdfium is mandatory here: without it there are no coordinates, and a caller
+/// that draws boxes must not guess. Hits whose rectangle cannot be established
+/// are dropped rather than given invented positions.
+pub fn locate(
+    input: &str,
+    pattern: &str,
+    regex: bool,
+    ignore_case: bool,
+    pages: Option<&str>,
+    password: Option<&str>,
+    pdfium_path: Option<&str>,
+) -> Result<Vec<Located>, PdfError> {
+    if pattern.is_empty() {
+        return Err(PdfError::MissingArg {
+            arg: "--find".to_string(),
+            example:
+                "pdf-cli redact --input in.pdf --output out.pdf --find \"Acme\" --replace \"Beta\""
+                    .into(),
+        });
+    }
+
+    let compiled = build_regex(pattern, regex, ignore_case)?;
+    let bytes = io::read_bytes(input)?;
+
+    let doc = io::load_doc_bytes(&bytes, password)?;
+    let total_pages = doc.get_pages().len() as u32;
+    drop(doc);
+
+    let page_list = io::parse_page_range(pages, total_pages)?;
+
+    let pdfium = io::bind_pdfium(pdfium_path)?;
+    let pdf_doc = pdfium
+        .load_pdf_from_byte_slice(&bytes, password)
+        .map_err(pdfium_error)?;
+
+    let mut out = Vec::new();
+    for &page_num in &page_list {
+        let page = pdf_doc
+            .pages()
+            .get((page_num - 1) as u16)
+            .map_err(pdfium_error)?;
+        let frame = PageFrame::new(&page);
+        let text = page.text().map_err(pdfium_error)?;
+
+        let (scanned, indices, byte_starts) = scan_page(&text);
+        if scanned.trim().is_empty() {
+            continue;
+        }
+
+        let raw = if regex {
+            regex_matches(&compiled, &scanned, &indices, &byte_starts, &text, &frame)
+        } else {
+            literal_matches(
+                &text,
+                pattern,
+                &compiled,
+                ignore_case,
+                &scanned,
+                &indices,
+                &byte_starts,
+                &frame,
+            )
+        };
+
+        for (_, _, hit_text, bbox) in raw {
+            if let Some(bbox) = bbox {
+                out.push(Located {
+                    page: page_num,
+                    text: hit_text,
+                    bbox,
+                });
+            }
+        }
+    }
+
+    Ok(out)
 }
 
 /// Accumulates hits while honouring `--count-only` and `--max-results`.
@@ -492,15 +583,20 @@ fn literal_matches(
 
         let span = bounds
             .and_then(|rect| text.chars_inside_rect(rect).ok())
-            .and_then(|chars| match (chars.first_char_index(), chars.last_char_index()) {
-                (Some(first), Some(last)) => {
-                    match (ordinal_of_index(indices, first), ordinal_of_index(indices, last)) {
-                        (Some(start), Some(end)) if end >= start => Some((start, end + 1)),
-                        _ => None,
+            .and_then(
+                |chars| match (chars.first_char_index(), chars.last_char_index()) {
+                    (Some(first), Some(last)) => {
+                        match (
+                            ordinal_of_index(indices, first),
+                            ordinal_of_index(indices, last),
+                        ) {
+                            (Some(start), Some(end)) if end >= start => Some((start, end + 1)),
+                            _ => None,
+                        }
                     }
-                }
-                _ => None,
-            });
+                    _ => None,
+                },
+            );
 
         match span {
             Some((start, mut end)) => {
@@ -525,7 +621,12 @@ fn literal_matches(
                 match found {
                     Some(m) => {
                         cursor = m.end();
-                        out.push((m.start(), m.end(), scanned[m.start()..m.end()].to_string(), bbox));
+                        out.push((
+                            m.start(),
+                            m.end(),
+                            scanned[m.start()..m.end()].to_string(),
+                            bbox,
+                        ));
                     }
                     None => out.push((0, 0, needle.to_string(), bbox)),
                 }
@@ -607,9 +708,7 @@ fn union_of_segments(segments: &PdfPageTextSegments<'_>) -> Option<PdfRect> {
         });
     }
 
-    union.map(|(left, bottom, top, right)| {
-        PdfRect::new_from_values(bottom, left, top, right)
-    })
+    union.map(|(left, bottom, top, right)| PdfRect::new_from_values(bottom, left, top, right))
 }
 
 fn round2(value: f32) -> f64 {

@@ -243,6 +243,77 @@ enum Commands {
         output: String,
     },
 
+    /// Cover matching text and write a replacement in its place
+    #[command(
+        name = "redact",
+        long_about = "Find text by searching and replace it in place: cover the found \
+            rectangle with an opaque box, then draw the new text on top.\n\n\
+            Built for bulk edits — the same wording repeated across many pages, where each \
+            copy differs by a name, a date or an amount.\n\n\
+            IMPORTANT: the original text stays inside the content stream. The cover hides it \
+            from view, but `extract`, `search` and copy-paste still reach it. This is a \
+            presentation fix, not a security control: never rely on it to redact secrets for \
+            publication. To make removal irreversible, rasterise the pages instead.\n\n\
+            Requires pdfium, because the rectangle must be measured — there is no fallback.\n\n\
+            Examples:\n  \
+            pdf-cli redact --input in.pdf --output out.pdf --find \"Acme Corp\" --replace \"Beta Ltd\" --dry-run --json\n  \
+            pdf-cli redact --input in.pdf --output out.pdf --find \"2024-0042\" --replace \"2025-0099\"\n  \
+            pdf-cli redact --input in.pdf --output out.pdf --find \"草稿\" --replace \"定稿\" --font C:\\Windows\\Fonts\\msyh.ttc"
+    )]
+    Redact {
+        #[arg(long)]
+        input: String,
+        #[arg(long)]
+        output: String,
+        /// Text to find (literal)
+        #[arg(long, value_name = "TEXT")]
+        find: String,
+        /// Replacement text
+        #[arg(long, value_name = "TEXT")]
+        replace: String,
+        /// Page range (default: all)
+        #[arg(long, allow_negative_numbers = true)]
+        pages: Option<String>,
+        /// Cover fill colour as "r,g,b" with each component 0-1
+        #[arg(long, default_value = "1 1 1")]
+        cover_color: String,
+        /// Path to a .ttf/.ttc font (required for CJK replacements; auto-detected by default)
+        #[arg(long)]
+        font: Option<String>,
+        /// Grow the cover box by this many points on every side
+        #[arg(long, default_value_t = 0.5)]
+        padding: f32,
+        /// Explicit path to pdfium.dll
+        #[arg(long)]
+        pdfium_path: Option<String>,
+    },
+
+    /// Draw text or cover boxes at exact page coordinates
+    #[command(
+        name = "overlay",
+        long_about = "Place text and optional cover boxes at coordinates you specify.\n\n\
+            The manual counterpart to `redact`: use it for fixed-layout templates, or for \
+            scanned pages that have no text layer to search.\n\n\
+            `--text` takes PAGE:key=value,... items separated by ';'. PAGE is N, N-M or *.\n\
+            Keys: x, y (points, origin bottom-left, required), text, size, w, h, cover (r/g/b).\n\n\
+            Examples:\n  \
+            pdf-cli overlay --input in.pdf --output out.pdf --text \"1:x=72,y=700,text=Hello,size=12\" --json\n  \
+            pdf-cli overlay --input in.pdf --output out.pdf --text \"*:x=72,y=760,text=DRAFT\"\n  \
+            pdf-cli overlay --input in.pdf --output out.pdf --text \"2-4:x=100,y=600,w=120,h=14,cover=1/1/1,text=Acme\""
+    )]
+    Overlay {
+        #[arg(long)]
+        input: String,
+        #[arg(long)]
+        output: String,
+        /// Placement spec: "PAGE:x=..,y=..,text=..;PAGE2:..."
+        #[arg(long, value_name = "SPEC")]
+        text: String,
+        /// Path to a .ttf/.ttc font (required for CJK text; auto-detected by default)
+        #[arg(long)]
+        font: Option<String>,
+    },
+
     /// Add page numbers
     #[command(name = "pagenum")]
     Pagenum {
@@ -504,6 +575,8 @@ fn writes_payload_to_stdout(cmd: &Commands) -> bool {
         | Commands::WatermarkRemove { output, .. }
         | Commands::Crop { output, .. }
         | Commands::Organize { output, .. }
+        | Commands::Overlay { output, .. }
+        | Commands::Redact { output, .. }
         | Commands::Convert { output, .. }
         | Commands::Merge { output, .. }
         | Commands::Invoice { output, .. } => output == io::STDIO,
@@ -516,7 +589,7 @@ fn writes_payload_to_stdout(cmd: &Commands) -> bool {
 }
 
 fn main() {
-    // clap builds the whole command tree with a deep recursive walk. With 26
+    // clap builds the whole command tree with a deep recursive walk. With 27
     // subcommands that walk overflows the 1 MiB default main-thread stack in a
     // debug build, aborting the process before any command code runs -- even for
     // `--version`. Run the real entry point on a thread with a comfortable stack
@@ -690,6 +763,42 @@ fn real_main() {
             dry_run,
         ),
         Commands::Invoice { input, output } => commands::invoice::run(&input, &output, dry_run),
+        Commands::Redact {
+            input,
+            output,
+            find,
+            replace,
+            pages,
+            cover_color,
+            font,
+            padding,
+            pdfium_path,
+        } => commands::redact::run(
+            &input,
+            &output,
+            &find,
+            &replace,
+            pages.as_deref(),
+            &cover_color,
+            font.as_deref(),
+            padding,
+            password.as_deref(),
+            pdfium_path.as_deref(),
+            dry_run,
+        ),
+        Commands::Overlay {
+            input,
+            output,
+            text,
+            font,
+        } => commands::overlay::run(
+            &input,
+            &output,
+            &text,
+            font.as_deref(),
+            password.as_deref(),
+            dry_run,
+        ),
         Commands::Pagenum {
             input,
             output,
